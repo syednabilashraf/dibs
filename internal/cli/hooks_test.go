@@ -283,3 +283,24 @@ func TestPostHookCatchesSwapDuringBackgroundCommand(t *testing.T) {
 		t.Fatalf("each swap is explained once:\n%s", again)
 	}
 }
+
+func TestPostHookTracksContainersBeforeDibsManagesThem(t *testing.T) {
+	w := newHookWorld(t)
+	command := "docker exec -e SLOW=60 qa-unmanaged sh /tmp/dibs-app-b/test.sh"
+	launch := hookInput(t, map[string]any{
+		"hook_event_name": "PostToolUse", "session_id": "s-early", "tool_use_id": "toolu_early", "tool_name": "Bash", "cwd": w.b.Path,
+		"tool_input": map[string]any{"command": command, "run_in_background": true},
+	})
+	callPost(t, launch)
+	time.Sleep(10 * time.Millisecond)
+	store, _ := state.Open(w.home)
+	store.Log(state.Event{Kind: "swap", Resource: "qa-unmanaged", Tree: w.a.Path, Label: w.a.Label, Actor: w.a.Path})
+
+	read := hookInput(t, map[string]any{
+		"hook_event_name": "PostToolUse", "session_id": "s-early", "tool_use_id": "toolu_read2", "tool_name": "Read", "cwd": w.b.Path,
+		"tool_input": map[string]any{"file_path": "/tmp/tasks/bg.output"},
+	})
+	if text := callPost(t, read); !strings.Contains(text, "qa-unmanaged was recreated") {
+		t.Fatalf("a container first used before dibs managed it must still be tracked:\n%s", text)
+	}
+}

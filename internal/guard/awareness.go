@@ -3,6 +3,7 @@ package guard
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -14,17 +15,66 @@ import (
 
 func Touches(st *state.State, command string) []string {
 	command = StripDibs(command)
+	seen := map[string]bool{}
 	touched := []string{}
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			touched = append(touched, name)
+		}
+	}
 	for _, name := range st.Names() {
 		r := st.Resources[name]
 		if r.Virtual {
 			continue
 		}
 		if mentions(command, name) || (r.Service != "" && r.Service != name && mentions(command, r.Service)) {
-			touched = append(touched, name)
+			add(name)
 		}
 	}
+	for _, name := range ExecTargets(command) {
+		if r := st.Lookup(name); r == nil || !r.Virtual {
+			add(name)
+		}
+	}
+	sort.Strings(touched)
 	return touched
+}
+
+var (
+	dockerExec = regexp.MustCompile(`\bdocker\s+(?:container\s+)?exec\b([^;&|\n]*)`)
+	dockerCp   = regexp.MustCompile(`\bdocker\s+(?:container\s+)?cp\b([^;&|\n]*)`)
+	execValue  = map[string]bool{"-e": true, "--env": true, "-w": true, "--workdir": true, "-u": true, "--user": true, "--env-file": true, "--detach-keys": true}
+)
+
+func ExecTargets(command string) []string {
+	targets := []string{}
+	for _, m := range dockerExec.FindAllStringSubmatch(command, -1) {
+		fields := strings.Fields(m[1])
+		for i := 0; i < len(fields); i++ {
+			field := strings.Trim(fields[i], `"'`)
+			if strings.HasPrefix(field, "-") {
+				if execValue[field] {
+					i++
+				}
+				continue
+			}
+			targets = append(targets, field)
+			break
+		}
+	}
+	for _, m := range dockerCp.FindAllStringSubmatch(command, -1) {
+		for _, field := range strings.Fields(m[1]) {
+			field = strings.Trim(field, `"'`)
+			if strings.HasPrefix(field, "-") || strings.HasPrefix(field, "/") || strings.HasPrefix(field, ".") {
+				continue
+			}
+			if i := strings.Index(field, ":"); i > 0 {
+				targets = append(targets, field[:i])
+			}
+		}
+	}
+	return targets
 }
 
 func Relevant(cfg *config.Config, st *state.State, caller *tree.Tree) bool {

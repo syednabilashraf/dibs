@@ -16,7 +16,7 @@ func TestTouches(t *testing.T) {
 		"docker exec web pytest":                  {"web"},
 		"docker compose exec web-svc ls":          {"web"},
 		"docker exec api ls && docker logs web":   {"api", "web"},
-		"docker exec webhook ls":                  {},
+		"docker exec webhook ls":                  {"webhook"},
 		"dibs take web --wait":                    {},
 		"docker cp ./x web:/tmp/dibs-app-b-1234/": {"web"},
 	}
@@ -24,6 +24,29 @@ func TestTouches(t *testing.T) {
 		if got := Touches(st, command); !reflect.DeepEqual(got, want) {
 			t.Errorf("Touches(%q) = %v, want %v", command, got, want)
 		}
+	}
+}
+
+func TestExecTargets(t *testing.T) {
+	cases := map[string][]string{
+		"docker exec -e SLOW=60 qa-web sh /tmp/x/test.sh":     {"qa-web"},
+		"docker exec -it -w /tmp/dibs-x --user root api bash": {"api"},
+		"docker cp ./web/. qa-web:/tmp/dibs-app-c/":           {"qa-web"},
+		"docker cp qa-web:/tmp/out.log ./out.log":             {"qa-web"},
+		"docker container exec worker true":                   {"worker"},
+		"echo docker":                                         {},
+	}
+	for command, want := range cases {
+		got := ExecTargets(command)
+		if len(got) == 0 && len(want) == 0 {
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("ExecTargets(%q) = %v, want %v", command, got, want)
+		}
+	}
+	if got := Touches(state.New(), "docker exec -e SLOW=1 qa-web sh t.sh"); !reflect.DeepEqual(got, []string{"qa-web"}) {
+		t.Fatalf("containers dibs does not manage yet are still tracked: %v", got)
 	}
 }
 
