@@ -242,3 +242,20 @@ func TestContextHook(t *testing.T) {
 		t.Fatalf("outside a managed repo the hook must stay silent:\n%s", text)
 	}
 }
+
+func TestClaudeSetupWritesSkill(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if code := Run([]string{"claude-setup", "--skills-dir", dir}, strings.NewReader(""), &out, &out); code != exitOK {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "dibs", "SKILL.md"))
+	if err != nil || !strings.HasPrefix(string(data), "---\nname: dibs\n") {
+		t.Fatalf("skill not written: %v", err)
+	}
+	for _, want := range []string{`"PreToolUse"`, " guard --post", " context", "browser-mcp"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("setup output should include %q:\n%s", want, out.String())
+		}
+	}
+}
