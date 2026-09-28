@@ -108,7 +108,7 @@ func runTake(e *env, args []string) int {
 	if len(containers) == 0 {
 		return exitOK
 	}
-	sw, err := a.swapper(ctx)
+	sw, err := a.swapper(ctx, t.Path)
 	if err != nil {
 		a.release(t.Path, names)
 		return e.errorf("%v (released %s)", err, strings.Join(names, ", "))
@@ -263,7 +263,7 @@ func runPass(e *env, args []string) int {
 	}
 	ctx, cancel := contextWithSignals()
 	defer cancel()
-	return a.restore(ctx, nil, a.split(released))
+	return a.restore(ctx, t, a.split(released))
 }
 
 func runCheck(e *env, args []string) int {
@@ -425,7 +425,11 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string) in
 	if len(names) == 0 {
 		return exitOK
 	}
-	sw, err := a.swapper(ctx)
+	actor := ""
+	if caller != nil {
+		actor = caller.Path
+	}
+	sw, err := a.swapper(ctx, actor)
 	if err != nil {
 		return a.errorf("%v", err)
 	}
@@ -448,9 +452,6 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string) in
 			a.errorf("%v", err)
 			code = exitError
 			continue
-		}
-		if outcome.Swapped {
-			a.store.Log(state.Event{Kind: "restore", Resource: name})
 		}
 	}
 	return code
@@ -502,7 +503,7 @@ func runGrab(e *env, args []string) int {
 	if *noSwap || len(containers) == 0 {
 		return exitOK
 	}
-	sw, err := a.swapper(ctx)
+	sw, err := a.swapper(ctx, t.Path)
 	if err != nil {
 		return e.errorf("%v", err)
 	}

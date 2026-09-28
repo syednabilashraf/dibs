@@ -119,3 +119,126 @@ func TestGuardHookFailsOpen(t *testing.T) {
 		}
 	}
 }
+
+func additionalContext(t *testing.T, out string) string {
+	t.Helper()
+	if out == "" {
+		return ""
+	}
+	var decoded struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("not JSON: %q", out)
+	}
+	return decoded.HookSpecificOutput.AdditionalContext
+}
+
+func logSwap(t *testing.T, w hookWorld, actor *tree.Tree) {
+	t.Helper()
+	store, _ := state.Open(w.home)
+	store.Log(state.Event{Kind: "swap", Resource: "web", Tree: actor.Path, Label: actor.Label, Actor: actor.Path})
+}
+
+func bashHook(t *testing.T, event, session, toolUse, cwd, command string) string {
+	t.Helper()
+	return hookInput(t, map[string]any{
+		"hook_event_name": event, "session_id": session, "tool_use_id": toolUse, "tool_name": "Bash", "cwd": cwd,
+		"tool_input": map[string]any{"command": command, "timeout": 120000},
+	})
+}
+
+func callPost(t *testing.T, stdin string) string {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"guard", "--post"}, strings.NewReader(stdin), &out, &errOut); code != exitOK {
+		t.Fatalf("post hook exit %d: %s", code, errOut.String())
+	}
+	return additionalContext(t, out.String())
+}
+
+func TestPostHookExplainsSwapDuringCommand(t *testing.T) {
+	w := newHookWorld(t)
+	command := "docker exec web sh -c 'cd /tmp/dibs-app-b && pytest'"
+	if _, out := callHook(t, "guard", bashHook(t, "PreToolUse", "s-b", "toolu_1", w.b.Path, command)); out != "" {
+		t.Fatalf("docker exec into a held container is allowed: %s", out)
+	}
+	time.Sleep(10 * time.Millisecond)
+	logSwap(t, w, w.a)
+
+	text := callPost(t, bashHook(t, "PostToolUse", "s-b", "toolu_1", w.b.Path, command))
+	if !strings.Contains(text, "web was recreated") || !strings.Contains(text, "copy your code again") {
+		t.Fatalf("b should be told its container was recreated under it:\n%s", text)
+	}
+	if !strings.Contains(text, "web is held by ticket-a") {
+		t.Fatalf("b should also learn who holds web:\n%s", text)
+	}
+
+	again := callPost(t, bashHook(t, "PostToolUse", "s-b", "toolu_2", w.b.Path, "docker exec web ls"))
+	if strings.Contains(again, "held by ticket-a") {
+		t.Fatalf("the held note is said once per session:\n%s", again)
+	}
+}
+
+func TestPostHookExplainsSwapBetweenCommands(t *testing.T) {
+	w := newHookWorld(t)
+	callHook(t, "guard", bashHook(t, "PreToolUse", "s-b", "toolu_1", w.b.Path, "docker cp ./web/. web:/tmp/dibs-app-b/"))
+	callPost(t, bashHook(t, "PostToolUse", "s-b", "toolu_1", w.b.Path, "docker cp ./web/. web:/tmp/dibs-app-b/"))
+
+	time.Sleep(10 * time.Millisecond)
+	logSwap(t, w, w.a)
+	time.Sleep(10 * time.Millisecond)
+
+	callHook(t, "guard", bashHook(t, "PreToolUse", "s-b", "toolu_2", w.b.Path, "docker exec web pytest /tmp/dibs-app-b"))
+	text := callPost(t, bashHook(t, "PostToolUse", "s-b", "toolu_2", w.b.Path, "docker exec web pytest /tmp/dibs-app-b"))
+	if !strings.Contains(text, "web was recreated") {
+		t.Fatalf("a swap between the copy and the test run must be reported:\n%s", text)
+	}
+}
+
+func TestPostHookQuietForOwnSwap(t *testing.T) {
+	w := newHookWorld(t)
+	callHook(t, "guard", bashHook(t, "PreToolUse", "s-a", "toolu_1", w.a.Path, "docker exec web ls"))
+	logSwap(t, w, w.a)
+	if text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_1", w.a.Path, "docker exec web ls")); text != "" {
+		t.Fatalf("a caused the swap, so there is nothing to explain:\n%s", text)
+	}
+}
+
+func TestPostHookWarnsBeforeLeaseEnds(t *testing.T) {
+	w := newHookWorld(t)
+	store, _ := state.Open(w.home)
+	store.Update(func(st *state.State) error {
+		for _, name := range []string{"browser", "web"} {
+			st.Resources[name].Holder.Expires = time.Now().Add(3 * time.Minute)
+		}
+		return nil
+	})
+	text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_9", w.a.Path, "ls"))
+	if !strings.Contains(text, "dibs renew") {
+		t.Fatalf("a should be warned before its lease ends:\n%s", text)
+	}
+	if text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_10", w.a.Path, "ls")); text != "" {
+		t.Fatalf("the lease warning is given once:\n%s", text)
+	}
+}
+
+func TestContextHook(t *testing.T) {
+	w := newHookWorld(t)
+	start := func(cwd string) string {
+		var out bytes.Buffer
+		Run([]string{"context"}, strings.NewReader(hookInput(t, map[string]any{"hook_event_name": "SessionStart", "source": "startup", "cwd": cwd})), &out, &out)
+		return additionalContext(t, out.String())
+	}
+	text := start(w.b.Path)
+	for _, want := range []string{"dibs take", "web: held by ticket-a", TmpDir(w.b.Path)} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("primer should mention %q:\n%s", want, text)
+		}
+	}
+	if text := start(t.TempDir()); text != "" {
+		t.Fatalf("outside a managed repo the hook must stay silent:\n%s", text)
+	}
+}

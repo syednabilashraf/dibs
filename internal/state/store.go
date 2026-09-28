@@ -104,6 +104,7 @@ type Event struct {
 	Resource string    `json:"resource,omitempty"`
 	Tree     string    `json:"tree,omitempty"`
 	Label    string    `json:"label,omitempty"`
+	Actor    string    `json:"actor,omitempty"`
 	Detail   string    `json:"detail,omitempty"`
 }
 
