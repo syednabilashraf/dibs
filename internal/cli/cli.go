@@ -49,6 +49,7 @@ func commands() []command {
 		{"status", "show holders, what each container serves, the queue and recent swaps", runStatus},
 		{"line", "show the queue", runLine},
 		{"tmpdir", "print a scratch path unique to this worktree, for copying code into containers", runTmpdir},
+		{"guard", "Claude Code PreToolUse hook: deny tool calls that would take containers from other worktrees", runGuard},
 		{"version", "print the version", runVersion},
 	}
 }
