@@ -152,7 +152,7 @@ func (a *app) report(o *swap.Outcome) {
 	} else {
 		a.printf("dibs: %s: recreated, now serving %s\n", o.Name, serving)
 		if o.Previous != "" && o.Previous != o.Serving {
-			a.printf("dibs: %s: it was serving %s; that worktree's running execs and files copied into the container are gone\n", o.Name, o.PreviousLabel)
+			a.printf("dibs: %s: it was serving %s; commands that were still running in it and files any session copied into it are gone\n", o.Name, o.PreviousLabel)
 		}
 	}
 	for _, kept := range o.Kept {
