@@ -176,11 +176,6 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 		return outcome, nil
 	}
 
-	if live != nil && summary.Running {
-		waited, running := s.waitExecs(ctx, name, summary.ID)
-		outcome.Waited, outcome.Interrupted = waited, running
-	}
-
 	if err := s.Store.Update(func(st *state.State) error {
 		r := st.Get(name)
 		r.Status = state.StatusSwapping
@@ -188,6 +183,11 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+
+	if live != nil && summary.Running {
+		waited, running := s.waitExecs(ctx, name, summary.ID)
+		outcome.Waited, outcome.Interrupted = waited, running
 	}
 
 	oldID := ""
