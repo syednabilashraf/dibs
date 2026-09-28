@@ -98,11 +98,12 @@ func Clean(path string) string {
 }
 
 type Change struct {
-	Source string
-	Result string
-	Root   string
-	Mapped bool
-	Reason string
+	Source  string
+	Result  string
+	Root    string
+	Mapped  bool
+	Foreign bool
+	Reason  string
 }
 
 func (c Change) Changed() bool { return c.Mapped && c.Result != c.Source }
@@ -137,11 +138,13 @@ func (m *Mapper) Map(source string, target *Tree) Change {
 	change := Change{Source: source, Result: source}
 	owner := m.Owner(source)
 	if owner == nil {
+		change.Foreign = true
 		change.Reason = "not inside a git worktree"
 		return change
 	}
 	change.Root = owner.Path
 	if target == nil || owner.Common != target.Common {
+		change.Foreign = true
 		change.Reason = "belongs to a different repository"
 		return change
 	}

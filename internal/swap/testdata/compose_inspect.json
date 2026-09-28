@@ -1,0 +1,68 @@
+{
+  "Id": "3583d7c73ffe8c1b8f6f0e2a4d6b1c9e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c",
+  "Name": "/web",
+  "State": {"Running": true, "Status": "running"},
+  "Config": {
+    "Hostname": "3583d7c73ffe",
+    "Domainname": "",
+    "User": "",
+    "Env": ["NODE_ENV=development", "PATH=/usr/local/bin:/usr/bin:/bin"],
+    "Cmd": ["/app/docker/run.sh"],
+    "Image": "registry.example.com/stack/web-dev",
+    "Volumes": {"/var/cache/app": {}},
+    "WorkingDir": "/app",
+    "Entrypoint": null,
+    "MacAddress": "82:e8:54:ef:1d:19",
+    "ExposedPorts": {"3000/tcp": {}},
+    "Labels": {
+      "com.docker.compose.config-hash": "085f405fa074553e80a984661e041a50a423d64643d8511b4bccd36c74bb84b4",
+      "com.docker.compose.project": "stack",
+      "com.docker.compose.service": "web",
+      "com.docker.compose.container-number": "1"
+    }
+  },
+  "HostConfig": {
+    "Binds": [
+      "/Users/dev/code/app/web:/app:rw",
+      "/Users/dev/code/app/shared/config.json:/etc/app/config.json:ro",
+      "/var/run/docker.sock:/var/run/docker.sock"
+    ],
+    "NetworkMode": "stack_default",
+    "PortBindings": {"3000/tcp": [{"HostIp": "", "HostPort": "3000"}]},
+    "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
+    "Memory": 8589934592,
+    "NanoCpus": 0,
+    "Mounts": [
+      {"Type": "volume", "Target": "/app/node_modules", "VolumeOptions": {}},
+      {"Type": "bind", "Source": "/Users/dev/code/app/tools", "Target": "/tools", "ReadOnly": true},
+      {"Type": "volume", "Source": "stack_cache", "Target": "/cache"}
+    ]
+  },
+  "Mounts": [
+    {"Type": "bind", "Source": "/Users/dev/code/app/web", "Destination": "/app", "Mode": "rw", "RW": true},
+    {"Type": "volume", "Name": "a6d60ed1b23ec46a0809e5cca10eea70e3f44beebf991ee5de9c9afa37f7e99f", "Source": "/var/lib/docker/volumes/a6d6/_data", "Destination": "/app/node_modules", "Driver": "local", "Mode": "z", "RW": true},
+    {"Type": "volume", "Name": "stack_cache", "Destination": "/cache", "Driver": "local", "RW": true},
+    {"Type": "volume", "Name": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0", "Destination": "/var/cache/app", "Driver": "local", "RW": true}
+  ],
+  "NetworkSettings": {
+    "Networks": {
+      "stack_default": {
+        "IPAMConfig": null,
+        "Links": null,
+        "Aliases": ["web", "web", "3583d7c73ffe"],
+        "MacAddress": "82:e8:54:ef:1d:19",
+        "DriverOpts": null,
+        "NetworkID": "n1",
+        "EndpointID": "e1",
+        "IPAddress": "172.18.0.7",
+        "DNSNames": ["web", "3583d7c73ffe"]
+      },
+      "stack_backend": {
+        "IPAMConfig": {"IPv4Address": "10.10.0.5"},
+        "Aliases": ["web-internal"],
+        "NetworkID": "n2",
+        "IPAddress": "10.10.0.5"
+      }
+    }
+  }
+}

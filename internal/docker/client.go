@@ -138,7 +138,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		_, err := io.Copy(w, resp.Body)
 		return err
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	return decoder.Decode(out)
 }
 
 func (c *Client) Inspect(ctx context.Context, name string) (map[string]any, error) {
