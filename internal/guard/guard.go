@@ -198,7 +198,7 @@ func (v view) bash(command, cwd string) Decision {
 			return deny("%s is held by %s %s. Restarting, recreating or re-pointing it would pull it out from under their tests. If you need it, run `dibs take %s --wait` in the background and wait for your turn.", name, who(h), since(h), name)
 		}
 		for _, pattern := range v.cfg.Guard.MutatePatterns {
-			if !strings.Contains(pattern, "{") {
+			if !templated(pattern) {
 				continue
 			}
 			if matchTemplate(pattern, command, name, r.Service) {
@@ -208,7 +208,7 @@ func (v view) bash(command, cwd string) Decision {
 	}
 	if len(heldByOthers) > 0 {
 		for _, pattern := range v.cfg.Guard.MutatePatterns {
-			if strings.Contains(pattern, "{") {
+			if templated(pattern) {
 				continue
 			}
 			if re, err := regexp.Compile(pattern); err == nil && re.MatchString(command) {
@@ -342,6 +342,10 @@ func composeMutates(tokens []string, name string, r *state.Resource) bool {
 		}
 	}
 	return false
+}
+
+func templated(pattern string) bool {
+	return strings.Contains(pattern, "{service}") || strings.Contains(pattern, "{container}")
 }
 
 func matchTemplate(pattern, command, name, service string) bool {
