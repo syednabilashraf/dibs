@@ -259,3 +259,27 @@ func TestClaudeSetupWritesSkill(t *testing.T) {
 		}
 	}
 }
+
+func TestPostHookCatchesSwapDuringBackgroundCommand(t *testing.T) {
+	w := newHookWorld(t)
+	command := "docker exec web sh /tmp/dibs-app-b/test.sh"
+	launch := hookInput(t, map[string]any{
+		"hook_event_name": "PostToolUse", "session_id": "s-bg", "tool_use_id": "toolu_bg", "tool_name": "Bash", "cwd": w.b.Path,
+		"tool_input": map[string]any{"command": command, "run_in_background": true},
+	})
+	callPost(t, launch)
+	time.Sleep(10 * time.Millisecond)
+	logSwap(t, w, w.a)
+
+	read := hookInput(t, map[string]any{
+		"hook_event_name": "PostToolUse", "session_id": "s-bg", "tool_use_id": "toolu_read", "tool_name": "Read", "cwd": w.b.Path,
+		"tool_input": map[string]any{"file_path": "/tmp/tasks/bg.output"},
+	})
+	text := callPost(t, read)
+	if !strings.Contains(text, "web was recreated") {
+		t.Fatalf("reading a background command's output after a swap must explain it:\n%s", text)
+	}
+	if again := callPost(t, read); strings.Contains(again, "recreated") {
+		t.Fatalf("each swap is explained once:\n%s", again)
+	}
+}

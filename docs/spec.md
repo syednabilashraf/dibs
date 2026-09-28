@@ -203,7 +203,7 @@ A PreToolUse hook. It reads only config and state (no Docker calls) and prints n
 | --- | --- |
 | Session start, resume, clear, compaction | A primer covering: the containers are shared; take before testing against them; check after each batch; pass promptly; never restart or re-point them yourself; unit tests go in `dibs tmpdir`; takes can recreate containers. Plus a live snapshot of holders and the queue. Emitted only in repositories dibs manages (or lists in config). |
 | A refused call | Who holds it, since when, when the lease ends, and the exact command to queue. |
-| After a command touching a container | If it was recreated by someone else during the command or since the session last touched it: when, what it now runs, and that running commands and copied files are gone. Uses a PreToolUse start record keyed by tool-use id, and per-session last-touched times. |
+| After a Bash command or a Read | For every container the session touched in the last few hours, if someone else recreated it during the command or since the session last heard about it: when, what it now runs, and that running commands and copied files are gone. Uses a PreToolUse start record keyed by tool-use id, and per-session last-touched times. Firing on Read as well covers background commands, whose output the session reads once they finish. |
 | After touching a container someone else holds | Its app runs their code, and it may be recreated when the lease changes hands. Said once per holder. |
 | Lease ending in under 5 minutes | Renew or pass. Said once per lease. |
 | A take that displaced someone | The taker is told what the container was serving and what that session lost. |
