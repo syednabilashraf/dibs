@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/syednabilashraf/dibs/internal/browser"
 	"github.com/syednabilashraf/dibs/internal/config"
 	"github.com/syednabilashraf/dibs/internal/docker"
 	"github.com/syednabilashraf/dibs/internal/state"
@@ -51,6 +52,7 @@ func commands() []command {
 		{"tmpdir", "print a scratch path unique to this worktree, for copying code into containers", runTmpdir},
 		{"guard", "Claude Code PreToolUse hook (--post for PostToolUse): guard shared containers and explain swaps", runGuard},
 		{"context", "Claude Code SessionStart hook: explain the shared containers and who holds what", runContext},
+		{"browser-mcp", "run chrome-devtools-mcp against one shared Chrome, launching it if needed", runBrowserMCP},
 		{"version", "print the version", runVersion},
 	}
 }
@@ -245,4 +247,27 @@ func holderText(h *state.Holder) string {
 		text += "]"
 	}
 	return text
+}
+
+func runBrowserMCP(e *env, args []string) int {
+	cfg, err := config.Load()
+	if err != nil {
+		return e.errorf("%v", err)
+	}
+	opts := browser.Options{
+		Port:       cfg.Browser.Port,
+		Profile:    cfg.Browser.Profile,
+		Chrome:     cfg.Browser.Chrome,
+		MCPCommand: cfg.Browser.MCPCommand,
+		StateDir:   config.Home(),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := browser.Ensure(ctx, opts); err != nil {
+		return e.errorf("shared browser unavailable: %v", err)
+	}
+	if err := browser.Exec(opts, args); err != nil {
+		return e.errorf("start %s: %v", strings.Join(opts.MCPCommand, " "), err)
+	}
+	return exitOK
 }
