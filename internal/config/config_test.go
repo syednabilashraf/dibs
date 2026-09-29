@@ -32,6 +32,9 @@ func TestDefaultsWithoutFile(t *testing.T) {
 	if !cfg.Guard.CheckPorts() {
 		t.Fatal("port checks should default on")
 	}
+	if !cfg.Guard.ProtectsBaseline() {
+		t.Fatal("baseline protection should default on")
+	}
 	if cfg.Browser.Port != 9222 || filepath.Base(cfg.Browser.Profile) != "chrome-profile" {
 		t.Fatalf("unexpected browser defaults: %+v", cfg.Browser)
 	}
@@ -51,6 +54,7 @@ containers:
       settle: 2s
 guard:
   ports: false
+  protect_baseline: false
   mutate_patterns:
     - 'mycli\s+restart\s+{service}'
 `)
@@ -69,6 +73,9 @@ guard:
 	}
 	if cfg.Guard.CheckPorts() {
 		t.Fatal("ports: false should disable port checks")
+	}
+	if cfg.Guard.ProtectsBaseline() {
+		t.Fatal("protect_baseline: false should disable baseline protection")
 	}
 	if got := cfg.ContainerConfig("web").Ready; got.Log != "compiled successfully" || got.Settle.D() != 2*time.Second {
 		t.Fatalf("ready config = %+v", got)

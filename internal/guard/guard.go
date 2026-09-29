@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +23,8 @@ type Input struct {
 		Command         string  `json:"command"`
 		Timeout         float64 `json:"timeout"`
 		RunInBackground bool    `json:"run_in_background"`
+		FilePath        string  `json:"file_path"`
+		NotebookPath    string  `json:"notebook_path"`
 	} `json:"tool_input"`
 }
 
@@ -46,18 +47,48 @@ type view struct {
 	self  string
 	now   time.Time
 	alive Alive
+	roots map[string][]string
 }
 
+var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
+
 func Decide(cfg *config.Config, st *state.State, caller *tree.Tree, in Input, now time.Time, alive Alive) Decision {
-	v := view{cfg: cfg, st: st, now: now, alive: alive}
+	v := view{cfg: cfg, st: st, now: now, alive: alive, roots: BaselineRoots(cfg, st)}
 	if caller != nil {
 		v.self = caller.Path
 	}
 	if v.isBrowserTool(in.ToolName) {
 		return v.browser()
 	}
+	if editTools[in.ToolName] {
+		return v.edit(in)
+	}
 	if in.ToolName == "Bash" {
 		return v.bash(StripDibs(in.ToolInput.Command), in.CWD)
+	}
+	return allow()
+}
+
+func (v view) edit(in Input) Decision {
+	if !v.cfg.Guard.ProtectsBaseline() {
+		return allow()
+	}
+	path := in.ToolInput.FilePath
+	if path == "" {
+		path = in.ToolInput.NotebookPath
+	}
+	if path == "" {
+		return allow()
+	}
+	if !filepath.IsAbs(path) && in.CWD != "" {
+		path = filepath.Join(in.CWD, path)
+	}
+	owner := owningTree(path)
+	if owner == nil {
+		return allow()
+	}
+	if containers, ok := v.roots[owner.Path]; ok {
+		return Decision{Deny: true, Reason: baselineSelfMessage(owner.Path, containers)}
 	}
 	return allow()
 }
@@ -168,8 +199,6 @@ func (v view) browser() Decision {
 var (
 	dockerVerb = regexp.MustCompile(`\bdocker\s+(container\s+)?(restart|stop|start|kill|rm|pause|unpause|update|rename)\b([^;&|\n]*)`)
 	compose    = regexp.MustCompile(`\bdocker(?:-|\s+)compose\b([^;&|\n]*)`)
-	gitMutate  = regexp.MustCompile(`\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)\s+(checkout|switch|reset|rebase|merge|pull|stash|restore|clean)\b`)
-	cdThenGit  = regexp.MustCompile(`\bcd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)[^|]*?\bgit\s+(checkout|switch|reset|rebase|merge|pull|stash|restore|clean)\b`)
 )
 
 func mentions(text, name string) bool {
@@ -247,7 +276,14 @@ func (v view) bash(command, cwd string) Decision {
 
 	for _, target := range gitTargets(command, cwd) {
 		t, err := tree.Resolve(target)
-		if err != nil || t.Path == v.self {
+		if err != nil {
+			continue
+		}
+		containers, isBaseline := v.roots[t.Path]
+		if t.Path == v.self {
+			if isBaseline && v.cfg.Guard.ProtectsBaseline() {
+				return Decision{Deny: true, Reason: baselineSelfMessage(t.Path, containers)}
+			}
 			continue
 		}
 		for _, name := range names {
@@ -256,17 +292,8 @@ func (v view) bash(command, cwd string) Decision {
 				return deny("%s is serving %s from %s for %s. Changing that worktree's branch would change their running code. Work in your own worktree instead.", name, r.ServingLabel, t.Path, who(h))
 			}
 		}
-		baselineFor := []string{}
-		for _, name := range names {
-			for _, root := range v.st.Resources[name].BaselineRoots {
-				if root == t.Path {
-					baselineFor = append(baselineFor, name)
-				}
-			}
-		}
-		if len(baselineFor) > 0 {
-			sort.Strings(baselineFor)
-			return deny("%s is the baseline code for %s. Switching its branch changes what those containers run for every session. Make the change in your own worktree; to test it, use `dibs take`.", t.Path, strings.Join(baselineFor, ", "))
+		if isBaseline {
+			return deny("%s is the baseline code for %s. Switching its branch changes what those containers run for every session. Make the change in your own worktree; to test it, use `dibs take`.", t.Path, baselineWhat(containers))
 		}
 	}
 	return allow()
@@ -357,23 +384,63 @@ func matchTemplate(pattern, command, name, service string) bool {
 	return err == nil && re.MatchString(command)
 }
 
+var gitMutating = map[string]bool{
+	"checkout": true, "switch": true, "reset": true, "rebase": true, "merge": true, "pull": true,
+	"stash": true, "restore": true, "clean": true, "cherry-pick": true, "revert": true, "am": true,
+}
+
 func gitTargets(command, cwd string) []string {
+	dir := cwd
 	targets := []string{}
-	add := func(raw string) {
-		raw = strings.Trim(raw, `"'`)
-		raw = config.ExpandHome(raw)
-		if !filepath.IsAbs(raw) && cwd != "" {
-			raw = filepath.Join(cwd, raw)
+	for _, segment := range separator.Split(command, -1) {
+		fields := strings.Fields(strings.TrimRight(strings.TrimLeft(strings.TrimSpace(segment), "("), ")"))
+		for len(fields) > 0 && strings.Contains(fields[0], "=") && !strings.HasPrefix(fields[0], "-") {
+			fields = fields[1:]
 		}
-		targets = append(targets, raw)
-	}
-	for _, m := range gitMutate.FindAllStringSubmatch(command, -1) {
-		add(m[1])
-	}
-	for _, m := range cdThenGit.FindAllStringSubmatch(command, -1) {
-		add(m[1])
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "cd", "pushd":
+			if len(fields) > 1 {
+				dir = resolveDir(dir, fields[1])
+			}
+		case "git":
+			target := dir
+			i := 1
+			for i < len(fields) && strings.HasPrefix(fields[i], "-") {
+				switch fields[i] {
+				case "-C":
+					if i+1 < len(fields) {
+						target = resolveDir(dir, fields[i+1])
+					}
+					i += 2
+				case "-c":
+					i += 2
+				default:
+					i++
+				}
+			}
+			if i >= len(fields) || !gitMutating[fields[i]] {
+				continue
+			}
+			if fields[i] == "stash" && i+1 < len(fields) && (fields[i+1] == "list" || fields[i+1] == "show") {
+				continue
+			}
+			if target != "" {
+				targets = append(targets, target)
+			}
+		}
 	}
 	return targets
+}
+
+func resolveDir(base, raw string) string {
+	raw = config.ExpandHome(strings.Trim(raw, `"'`))
+	if !filepath.IsAbs(raw) && base != "" {
+		raw = filepath.Join(base, raw)
+	}
+	return raw
 }
 
 var separator = regexp.MustCompile(`&&|\|\||[;|&\n]`)
