@@ -42,7 +42,7 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
   - switching branches in another worktree or in the baseline checkout.
 
   It prints nothing unless it denies, so your normal permission prompts still apply, and it fails open on its own errors. It is a safety net, not a security boundary.
-- **Primer (SessionStart).** Sessions in a repository with managed containers start knowing the rules and who holds what. The primer is re-injected after compaction.
+- **Primer (SessionStart and SubagentStart).** Sessions in a repository with managed containers start knowing the rules and who holds what. The primer is re-injected after compaction. Subagents get it too, with a reminder that they share their parent's leases (leases belong to the worktree) and must not pass what they did not take.
 - **Notes (PostToolUse on Bash and Read).** A session is told when a container it used was recreated while its command ran or since it last touched it ("copy again and rerun"). Background commands are covered too: the note arrives with the session's next command or file read, which is usually it reading the command's output. The session is also told when it touches a container someone else holds, and before its lease runs out.
 - **Skill.** `dibs claude-setup` installs a skill with the full protocol.
 - **Shared browser.** `dibs browser-mcp` runs chrome-devtools-mcp against a single Chrome with remote debugging, launching it on first use. Every session gets browser tools and one login, instead of the second session failing on a locked profile.
