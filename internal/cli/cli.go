@@ -53,6 +53,7 @@ func commands() []command {
 		{"guard", "Claude Code PreToolUse hook (--post for PostToolUse): guard shared containers and explain swaps", runGuard},
 		{"context", "Claude Code SessionStart hook: explain the shared containers and who holds what", runContext},
 		{"browser-mcp", "run chrome-devtools-mcp against one shared Chrome, launching it if needed", runBrowserMCP},
+		{"claude-setup", "install the dibs skill for Claude Code and print the hooks to add", runClaudeSetup},
 		{"version", "print the version", runVersion},
 	}
 }
