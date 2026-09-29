@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/syednabilashraf/dibs/internal/docker"
+	"github.com/syednabilashraf/dibs/internal/guard"
 	"github.com/syednabilashraf/dibs/internal/queue"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/swap"
@@ -132,8 +133,19 @@ func runTake(e *env, args []string) int {
 			return e.errorf("%v\ndibs: released %s", err, strings.Join(names, ", "))
 		}
 	}
+	a.warnIfBaseline(t)
 	e.printf("dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done testing.\n")
 	return exitOK
+}
+
+func (a *app) warnIfBaseline(t *tree.Tree) {
+	st, err := a.store.Read()
+	if err != nil {
+		return
+	}
+	if _, ok := guard.BaselineRoots(a.cfg, st)[t.Path]; ok {
+		a.printf("dibs: note: %s is the baseline checkout, which every session without a lease also runs, so these containers were already serving it. If you are working on a change, create a worktree for it and take from there.\n", t.Path)
+	}
 }
 
 func (a *app) report(o *swap.Outcome) {
