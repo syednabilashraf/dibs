@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -164,37 +165,58 @@ func (h *hookContext) saveSession(mem *sessionMemory) {
 }
 
 func (h *hookContext) post(w io.Writer) {
-	if h.in.ToolName != "Bash" {
+	if h.in.ToolName != "Bash" && h.in.ToolName != "Read" {
 		return
 	}
 	now := time.Now()
-	touched := guard.Touches(h.st, h.in.ToolInput.Command)
-	notes := []string{}
 	mem := h.loadSession()
+	windows := map[string]time.Time{}
+	for name, last := range mem.LastTouched {
+		if now.Sub(last) > 6*time.Hour {
+			delete(mem.LastTouched, name)
+			continue
+		}
+		windows[name] = last
+	}
 
-	if len(touched) > 0 && !h.in.ToolInput.RunInBackground {
-		started, ok := h.takeInflight()
-		if !ok {
-			timeout := time.Duration(h.in.ToolInput.Timeout) * time.Millisecond
-			if timeout <= 0 || timeout > 10*time.Minute {
-				timeout = 2 * time.Minute
+	var touched []string
+	if h.in.ToolName == "Bash" {
+		touched = guard.Touches(h.st, h.in.ToolInput.Command)
+		if len(touched) > 0 {
+			started := now
+			if !h.in.ToolInput.RunInBackground {
+				if recorded, ok := h.takeInflight(); ok {
+					started = recorded
+				} else {
+					timeout := time.Duration(h.in.ToolInput.Timeout) * time.Millisecond
+					if timeout <= 0 || timeout > 10*time.Minute {
+						timeout = 2 * time.Minute
+					}
+					started = now.Add(-timeout)
+				}
 			}
-			started = now.Add(-timeout)
+			for _, name := range touched {
+				if last, ok := windows[name]; !ok || started.Before(last) {
+					windows[name] = started
+				}
+			}
 		}
-		windows := map[string]time.Time{}
-		earliest := started
-		for _, name := range touched {
-			windows[name] = started
-			if last, seen := mem.LastTouched[name]; seen && last.Before(started) {
-				windows[name] = last
-			}
-			if windows[name].Before(earliest) {
-				earliest = windows[name]
+	}
+
+	notes := []string{}
+	if len(windows) > 0 {
+		names := make([]string, 0, len(windows))
+		earliest := now
+		for name, start := range windows {
+			names = append(names, name)
+			if start.Before(earliest) {
+				earliest = start
 			}
 		}
+		sort.Strings(names)
 		events, _ := h.store.Events(earliest)
-		notes = append(notes, guard.SwapNotes(events, touched, windows, h.self())...)
-		for _, name := range touched {
+		notes = append(notes, guard.SwapNotes(events, names, windows, h.self())...)
+		for _, name := range names {
 			mem.LastTouched[name] = now
 		}
 	}
@@ -215,7 +237,7 @@ func (h *hookContext) post(w io.Writer) {
 		}
 	}
 
-	if len(touched) > 0 || len(notes) > 0 {
+	if len(windows) > 0 || len(notes) > 0 {
 		h.saveSession(mem)
 	}
 	if len(notes) > 0 {

@@ -12,7 +12,7 @@ dibs: waiting: web held by ticket-a (app-ticket-a) since 14:02 (lease ends 14:32
 dibs: ticket-b holds browser, web until 15:01
 dibs: web: waiting up to 5m0s for 1 running exec(s) from other sessions to finish: pytest -q
 dibs: web: recreated, now serving ticket-b
-dibs: web: it was serving ticket-a; that worktree's running execs and files copied into the container are gone
+dibs: web: it was serving ticket-a; commands that were still running in it and files any session copied into it are gone
 dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done testing.
 ```
 
@@ -43,7 +43,7 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 
   It prints nothing unless it denies, so your normal permission prompts still apply, and it fails open on its own errors. It is a safety net, not a security boundary.
 - **Primer (SessionStart).** Sessions in a repository with managed containers start knowing the rules and who holds what. The primer is re-injected after compaction.
-- **Notes (PostToolUse).** A session is told when a container it used was recreated while its command ran or since it last touched it ("copy again and rerun"). It is also told when it touches a container someone else holds, and before its lease runs out.
+- **Notes (PostToolUse on Bash and Read).** A session is told when a container it used was recreated while its command ran or since it last touched it ("copy again and rerun"). Background commands are covered too: the note arrives with the session's next command or file read, which is usually it reading the command's output. The session is also told when it touches a container someone else holds, and before its lease runs out.
 - **Skill.** `dibs claude-setup` installs a skill with the full protocol.
 - **Shared browser.** `dibs browser-mcp` runs chrome-devtools-mcp against a single Chrome with remote debugging, launching it on first use. Every session gets browser tools and one login, instead of the second session failing on a locked profile.
 

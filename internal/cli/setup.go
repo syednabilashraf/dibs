@@ -37,7 +37,7 @@ func runClaudeSetup(e *env, args []string) int {
 			"hooks":   []any{map[string]any{"type": "command", "command": binary + " guard"}},
 		}},
 		"PostToolUse": []any{map[string]any{
-			"matcher": "^Bash$",
+			"matcher": "^Bash$|^Read$",
 			"hooks":   []any{map[string]any{"type": "command", "command": binary + " guard --post"}},
 		}},
 		"SessionStart": []any{map[string]any{

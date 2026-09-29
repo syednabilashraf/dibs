@@ -125,7 +125,7 @@ func TestCLIHandoffBetweenWorktrees(t *testing.T) {
 	}
 	select {
 	case result := <-done:
-		if !strings.HasPrefix(result, "0\n") || !strings.Contains(result, "it was serving ticket-a") {
+		if !strings.HasPrefix(result, "0\n") || !strings.Contains(result, "it was serving ticket-a;") {
 			t.Fatalf("b's waiting take should succeed and name what it displaced:\n%s", result)
 		}
 	case <-time.After(60 * time.Second):

@@ -46,7 +46,7 @@ func newWorld(t *testing.T) world {
 	w.main, _ = tree.Resolve(main)
 	w.a, _ = tree.Resolve(filepath.Join(root, "app-a"))
 	w.b, _ = tree.Resolve(filepath.Join(root, "app-b"))
-	w.cfg.Guard.MutatePatterns = []string{`\bmycli\s+(restart|rebuild)\b.*\b{service}\b`, `\bmycli\s+mount\b`}
+	w.cfg.Guard.MutatePatterns = []string{`\bmycli\s+(restart|rebuild)\b.*\b{service}\b`, `\bmycli\s+mount\b`, `\bmycli\s+down(\s+-{1,2}\w+)*\s*$`}
 	return w
 }
 
@@ -161,6 +161,7 @@ func TestBashMutations(t *testing.T) {
 		{"mycli rebuild web-svc", true},
 		{"mycli rebuild api", false},
 		{"mycli mount ../app-b web-svc", true},
+		{"mycli down --volumes", true},
 		{"ls -la && docker restart web", true},
 		{"dibs take ui --wait", false},
 		{"dibs take web --wait && docker restart web", true},
@@ -179,6 +180,14 @@ func TestBashMutations(t *testing.T) {
 		if d := Decide(w.cfg, st, w.a, bash(c.command, w.a.Path), now, alive); d.Deny {
 			t.Errorf("the holder must never be blocked: %q -> %s", c.command, d.Reason)
 		}
+	}
+}
+
+func TestRegexBracesAreNotPlaceholders(t *testing.T) {
+	w := newWorld(t)
+	d := Decide(w.cfg, w.aHoldsEverything(), w.b, bash("mycli down", w.b.Path), now, alive)
+	if !d.Deny || !strings.Contains(d.Reason, "this command can restart or re-point shared containers") {
+		t.Fatalf("a pattern with regex braces but no placeholder applies to the whole stack: %s", d.Reason)
 	}
 }
 

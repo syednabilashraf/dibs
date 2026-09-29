@@ -199,6 +199,12 @@ func TestIntegrationWaitsForRunningExecs(t *testing.T) {
 	run(t, "docker", "exec", "-d", r.container, "sleep", "3")
 	time.Sleep(300 * time.Millisecond)
 
+	statusDuringWait := make(chan state.Status, 1)
+	go func() {
+		time.Sleep(time.Second)
+		st, _ := r.swapper.Store.Read()
+		statusDuringWait <- st.Lookup(r.container).Status
+	}()
 	outcome, err := r.swapper.Serve(context.Background(), r.container, r.feature)
 	if err != nil {
 		t.Fatal(err)
@@ -208,6 +214,9 @@ func TestIntegrationWaitsForRunningExecs(t *testing.T) {
 	}
 	if !strings.Contains(r.log.String(), "sleep 3") {
 		t.Fatalf("the wait should name the exec it waits for:\n%s", r.log)
+	}
+	if got := <-statusDuringWait; got != state.StatusSwapping {
+		t.Fatalf("while waiting for execs the container must already read as swapping, got %q", got)
 	}
 }
 
