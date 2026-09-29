@@ -42,13 +42,16 @@ type Container struct {
 }
 
 type Guard struct {
-	BrowserTools   []string `yaml:"browser_tools"`
-	MutatePatterns []string `yaml:"mutate_patterns"`
-	UsePatterns    []string `yaml:"use_patterns"`
-	Ports          *bool    `yaml:"ports"`
+	BrowserTools    []string `yaml:"browser_tools"`
+	MutatePatterns  []string `yaml:"mutate_patterns"`
+	UsePatterns     []string `yaml:"use_patterns"`
+	Ports           *bool    `yaml:"ports"`
+	ProtectBaseline *bool    `yaml:"protect_baseline"`
 }
 
 func (g Guard) CheckPorts() bool { return g.Ports == nil || *g.Ports }
+
+func (g Guard) ProtectsBaseline() bool { return g.ProtectBaseline == nil || *g.ProtectBaseline }
 
 type Browser struct {
 	Port       int      `yaml:"port"`

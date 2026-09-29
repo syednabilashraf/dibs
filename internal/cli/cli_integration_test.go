@@ -172,6 +172,22 @@ func TestCLICheckDetectsOutsideRecreate(t *testing.T) {
 	}
 }
 
+func TestCLITakeFromBaselineWarns(t *testing.T) {
+	s := newStack(t)
+	code, out := dibs(t, "take", s.container, "--tree", s.main)
+	if code != exitOK || !strings.Contains(out, "is the baseline checkout") {
+		t.Fatalf("taking from the baseline checkout should say so: %d\n%s", code, out)
+	}
+	code, out = dibs(t, "take", s.container, "--tree", s.main)
+	if !strings.Contains(out, "is the baseline checkout") {
+		t.Fatalf("the note repeats on every take from the baseline:\n%s", out)
+	}
+	dibs(t, "pass", "--tree", s.main)
+	if code, out := dibs(t, "take", s.container, "--tree", s.a); code != exitOK || strings.Contains(out, "baseline checkout") {
+		t.Fatalf("a take from a worktree must not get the baseline note: %d\n%s", code, out)
+	}
+}
+
 func TestCLIUnknownResource(t *testing.T) {
 	s := newStack(t)
 	code, out := dibs(t, "take", "no-such-thing", "--tree", s.a)

@@ -119,6 +119,19 @@ func TestPrimerAndRelevance(t *testing.T) {
 			t.Errorf("primer should mention %q:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, "baseline checkout") {
+		t.Fatal("a session in its own worktree must not get the baseline warning")
+	}
+	if !strings.Contains(text, "ask the user before applying a schema migration") {
+		t.Fatal("every primer should mention the shared database")
+	}
+	st.Resources["web"].BaselineRoots = []string{w.main.Path}
+	inBaseline := Primer(w.cfg, st, w.main, "/tmp/dibs-app-12345678", now, false)
+	for _, want := range []string{"IMPORTANT: this session is running in " + w.main.Path, "The containers api, web run this code", "EnterWorktree", "dibs blocks edits and branch changes"} {
+		if !strings.Contains(inBaseline, want) {
+			t.Errorf("a session in the baseline should be told %q:\n%s", want, inBaseline)
+		}
+	}
 	if text := Snapshot(st, w.a, now); !strings.Contains(text, "web: held by you, running your worktree") {
 		t.Errorf("snapshot for the holder:\n%s", text)
 	}

@@ -253,7 +253,7 @@ func TestClaudeSetupWritesSkill(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(data), "---\nname: dibs\n") {
 		t.Fatalf("skill not written: %v", err)
 	}
-	for _, want := range []string{`"PreToolUse"`, " guard --post", " context", `"SubagentStart"`, "browser-mcp"} {
+	for _, want := range []string{`"PreToolUse"`, "NotebookEdit", " guard --post", " context", `"SubagentStart"`, "browser-mcp"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("setup output should include %q:\n%s", want, out.String())
 		}

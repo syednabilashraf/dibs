@@ -33,7 +33,7 @@ func runClaudeSetup(e *env, args []string) int {
 	}
 	hooks := map[string]any{"hooks": map[string]any{
 		"PreToolUse": []any{map[string]any{
-			"matcher": "^Bash$|^mcp__.*",
+			"matcher": "^Bash$|^mcp__.*|^(Edit|Write|MultiEdit|NotebookEdit)$",
 			"hooks":   []any{map[string]any{"type": "command", "command": binary + " guard"}},
 		}},
 		"PostToolUse": []any{map[string]any{
