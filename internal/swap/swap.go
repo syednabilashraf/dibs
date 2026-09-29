@@ -32,6 +32,7 @@ type Swapper struct {
 	Store  *state.Store
 	Config *config.Config
 	Out    io.Writer
+	Actor  string
 
 	beforeCreate func(*Spec) error
 }
@@ -204,7 +205,7 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 	outcome.Swapped = true
 	meta.ContainerID = id
 	s.record(name, meta, servingPath, servingLabel, state.StatusSwapping, time.Now())
-	s.Store.Log(state.Event{Kind: "swap", Resource: name, Tree: servingPath, Label: servingLabel, Detail: outcome.PreviousLabel})
+	s.Store.Log(state.Event{Kind: "swap", Resource: name, Tree: servingPath, Label: servingLabel, Actor: s.Actor, Detail: outcome.PreviousLabel})
 	if interrupted {
 		return outcome, ErrInterrupted
 	}
@@ -327,7 +328,7 @@ func (s *Swapper) rollback(ctx context.Context, name string, baseline map[string
 	}
 	s.record(name, meta, "", "", status, time.Now())
 	if err == nil {
-		s.Store.Log(state.Event{Kind: "restore", Resource: name, Detail: "rollback after a failed swap"})
+		s.Store.Log(state.Event{Kind: "restore", Resource: name, Actor: s.Actor, Detail: "rollback after a failed swap"})
 	}
 	return err
 }

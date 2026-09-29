@@ -49,7 +49,8 @@ func commands() []command {
 		{"status", "show holders, what each container serves, the queue and recent swaps", runStatus},
 		{"line", "show the queue", runLine},
 		{"tmpdir", "print a scratch path unique to this worktree, for copying code into containers", runTmpdir},
-		{"guard", "Claude Code PreToolUse hook: deny tool calls that would take containers from other worktrees", runGuard},
+		{"guard", "Claude Code PreToolUse hook (--post for PostToolUse): guard shared containers and explain swaps", runGuard},
+		{"context", "Claude Code SessionStart hook: explain the shared containers and who holds what", runContext},
 		{"version", "print the version", runVersion},
 	}
 }
@@ -115,12 +116,12 @@ func (e *env) app() (*app, error) {
 	return &app{env: e, cfg: cfg, store: store}, nil
 }
 
-func (a *app) swapper(ctx context.Context) (*swap.Swapper, error) {
+func (a *app) swapper(ctx context.Context, actor string) (*swap.Swapper, error) {
 	client, err := docker.New(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &swap.Swapper{Docker: client, Store: a.store, Config: a.cfg, Out: a.stdout}, nil
+	return &swap.Swapper{Docker: client, Store: a.store, Config: a.cfg, Out: a.stdout, Actor: actor}, nil
 }
 
 func (a *app) split(names []string) (containers []string) {
