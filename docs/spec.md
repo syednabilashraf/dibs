@@ -193,7 +193,8 @@ A PreToolUse hook. It reads only config and state (no Docker calls) and prints n
 | Browser | `browser` is held by another worktree, or any managed container is held by another worktree, is serving another worktree, or is mid-swap or failed for the caller. |
 | Mutation | A container held by another worktree is named by `docker restart/stop/start/kill/rm/pause/unpause/update/rename`, or by a mutating compose subcommand. A compose command that names no service affects every service, unless its project differs. User `mutate_patterns` also count: with `{service}`/`{container}` placeholders they apply per held container, and without them they apply whenever anything is held by others. |
 | Use | The command targets the published port of a container serving another worktree, or matches `use_patterns` (e2e runners) while any container serves another worktree. |
-| Git | A branch-changing git command targets another worktree that serves a held container, or the baseline checkout of any managed container. |
+| Git | A branch-changing git command targets another worktree that serves a held container, or the baseline checkout. A bare git command targets the current directory, following any `cd` or `-C` earlier in the command. |
+| Baseline | The target is inside the baseline checkout (the source of the containers' baseline mounts, or a repository listed in config), even for a session that lives there: Edit/Write/NotebookEdit on its files, and branch-changing git in it. The message tells the session to create a worktree. Worktrees nested inside it are not the baseline. `guard.protect_baseline: false` turns this off. |
 
 `docker exec` and `docker cp` are always allowed. They are how unit tests run from scratch copies.
 
@@ -202,6 +203,7 @@ A PreToolUse hook. It reads only config and state (no Docker calls) and prints n
 | When | What the session learns |
 | --- | --- |
 | Session start, resume, clear, compaction, and every subagent start | A primer covering: the containers are shared; take before testing against them; check after each batch; pass promptly; never restart or re-point them yourself; unit tests go in `dibs tmpdir`; takes can recreate containers. Plus a live snapshot of holders and the queue. Emitted only in repositories dibs manages (or lists in config). Subagents also hear that they share the leases of the session that started them, since holders are worktrees, and must not pass what they did not take. |
+| Starting in the baseline checkout | A prominent block: this checkout is what every lease-less session runs, so do not change anything here; create a worktree (EnterWorktree or `git worktree add`) and work inside it. `dibs take` from the baseline repeats it. |
 | A refused call | Who holds it, since when, when the lease ends, and the exact command to queue. |
 | After a Bash command or a Read | For every container the session touched in the last few hours, if someone else recreated it during the command or since the session last heard about it: when, what it now runs, and that running commands and copied files are gone. Uses a PreToolUse start record keyed by tool-use id, and per-session last-touched times. Firing on Read as well covers background commands, whose output the session reads once they finish. |
 | After touching a container someone else holds | Its app runs their code, and it may be recreated when the lease changes hands. Said once per holder. |

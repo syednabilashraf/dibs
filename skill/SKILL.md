@@ -26,6 +26,16 @@ Take everything you need in **one** `take`. It is all-or-nothing, so it cannot d
 
 Leases belong to the **worktree**, not to a session. A subagent working in the same worktree shares its parent's leases: it should use what the parent already holds, and never `dibs pass` something it did not take itself.
 
+## If your session starts in the baseline checkout
+
+The baseline checkout is the one the shared containers run by default (usually the main clone), and the session primer names it. Every session without a lease is testing that code, so:
+
+- Read, search and plan there as much as you like.
+- **Before editing any file, create a worktree for your task** and work only inside it. Use the EnterWorktree tool if you have it; otherwise run `git worktree add ../<name> -b <branch>` and use that directory for every edit, command and `dibs take`.
+- Never switch branches, pull, stash or reset in the baseline checkout. The dibs hook blocks edits and branch changes there.
+
+If `dibs take` says your worktree is the baseline checkout, you are in the wrong place: make a worktree and take from there.
+
 ## Waiting
 
 `dibs take ... --wait` blocks until every resource is yours **and** each container has been recreated on your worktree and is ready. Other sessions may be ahead of you, so run it as a **background** command and let its completion wake you. Do not poll it and do not start testing before it returns. Its output tells you:
@@ -40,6 +50,10 @@ Without `--wait`, `dibs take` answers immediately: exit 0 means granted, exit 2 
 - `browser`: whenever you will use browser automation. There is one shared Chrome, and every session sees every tab: act only on tabs you opened, and close them when done.
 - Every container whose code your change touches. `dibs status` lists the containers dibs knows about; any container name works.
 - A container you did not change can stay on the baseline. The browser guard requires every container dibs manages to run either the baseline or your worktree, so a container still running someone else's worktree must be taken (or restored with `dibs restore`) first.
+
+## Shared databases
+
+Databases and other stateful services are not swapped: every worktree uses the same ones. A schema migration you apply is seen by every session and can stop containers built from other checkouts from starting. Ask the user before applying one, and remove test data you add.
 
 ## Checking your results
 
@@ -97,7 +111,7 @@ These are facts about the shared environment. Act on them before interpreting te
 | `dibs status` | Holders, what each container runs, the queue, recent swaps. |
 | `dibs line` | The queue. |
 | `dibs tmpdir` | Your worktree's scratch path for copies inside containers. |
-| `dibs restore <container>` | Put an unheld container back on the baseline. |
+| `dibs restore <container>` | Put a container back on the baseline (unheld, or held by you). |
 
 Exit code 2 always means "no", and 1 means something broke.
 
@@ -106,5 +120,5 @@ Exit code 2 always means "no", and 1 means something broke.
 - Hold containers while writing code.
 - Report test results without a passing `dibs check`.
 - Restart, rebuild, recreate or re-point shared containers yourself.
-- Switch branches in any worktree but your own.
+- Switch branches in any worktree but your own, or edit anything in the baseline checkout.
 - Run `dibs grab` or `dibs drop`, or edit files under `~/.dibs`.

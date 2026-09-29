@@ -39,10 +39,11 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
   - restarting, recreating or re-pointing a held container, including through your own wrapper commands (configurable patterns);
   - driving the browser while the stack serves someone else's code;
   - hitting a container's published port while it serves someone else;
-  - switching branches in another worktree or in the baseline checkout.
+  - switching branches in another worktree;
+  - editing files or changing branches in the baseline checkout (the checkout the containers run by default, usually the main clone), including from a session that started there. That session is told to create a worktree instead.
 
   It prints nothing unless it denies, so your normal permission prompts still apply, and it fails open on its own errors. It is a safety net, not a security boundary.
-- **Primer (SessionStart and SubagentStart).** Sessions in a repository with managed containers start knowing the rules and who holds what. The primer is re-injected after compaction. Subagents get it too, with a reminder that they share their parent's leases (leases belong to the worktree) and must not pass what they did not take.
+- **Primer (SessionStart and SubagentStart).** Sessions in a repository with managed containers start knowing the rules and who holds what. A session that starts in the baseline checkout is told to create a worktree before changing anything, and every session is reminded that databases are shared. The primer is re-injected after compaction. Subagents get it too, with a reminder that they share their parent's leases (leases belong to the worktree) and must not pass what they did not take.
 - **Notes (PostToolUse on Bash and Read).** A session is told when a container it used was recreated while its command ran or since it last touched it ("copy again and rerun"). Background commands are covered too: the note arrives with the session's next command or file read, which is usually it reading the command's output. The session is also told when it touches a container someone else holds, and before its lease runs out.
 - **Skill.** `dibs claude-setup` installs a skill with the full protocol.
 - **Shared browser.** `dibs browser-mcp` runs chrome-devtools-mcp against a single Chrome with remote debugging, launching it on first use. Every session gets browser tools and one login, instead of the second session failing on a locked profile.
@@ -81,7 +82,7 @@ stop_timeout: 10s     # docker stop grace period
 exec_grace: 5m        # wait this long for running execs before recreating
 restore_on_pass: false
 
-repos: [~/code/app]   # show the session primer here even before anything is taken
+repos: [~/code/app]   # main checkouts: primer shown here, treated as the baseline before anything is taken
 
 virtual: [browser]    # resources that are plain locks, not containers
 
@@ -104,6 +105,7 @@ guard:
   use_patterns:                      # test runners that need the stack
     - '\bplaywright\s+test\b'
   ports: true                        # deny requests to ports of containers serving others
+  protect_baseline: true             # deny edits and branch changes in the baseline checkout
 
 browser:
   port: 9222
