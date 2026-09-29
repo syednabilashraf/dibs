@@ -107,7 +107,13 @@ func TestPrimerAndRelevance(t *testing.T) {
 		t.Fatal("a configured repo is relevant before anything is managed")
 	}
 
-	text := Primer(w.cfg, st, w.b, "/tmp/dibs-app-b-12345678", now)
+	text := Primer(w.cfg, st, w.b, "/tmp/dibs-app-b-12345678", now, false)
+	if strings.Contains(text, "You are a subagent") {
+		t.Fatal("the session primer must not address a subagent")
+	}
+	if sub := Primer(w.cfg, st, w.b, "/tmp/dibs-app-b-12345678", now, true); !strings.Contains(sub, "Never run `dibs pass` for anything you did not take yourself") {
+		t.Fatalf("the subagent primer must warn about shared leases:\n%s", sub)
+	}
 	for _, want := range []string{"dibs take", "dibs check", "dibs pass", "/tmp/dibs-app-b-12345678", "ui = browser, web", "web: held by ticket-a", "running ticket-a", "api: free, running the baseline"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("primer should mention %q:\n%s", want, text)

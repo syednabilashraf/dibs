@@ -94,10 +94,13 @@ func Relevant(cfg *config.Config, st *state.State, caller *tree.Tree) bool {
 	return false
 }
 
-func Primer(cfg *config.Config, st *state.State, caller *tree.Tree, tmpdir string, now time.Time) string {
+func Primer(cfg *config.Config, st *state.State, caller *tree.Tree, tmpdir string, now time.Time, subagent bool) string {
 	var b strings.Builder
 	b.WriteString("Shared Docker containers are coordinated by dibs.\n\n")
 	b.WriteString("This repository's local containers are shared with other agent sessions working in other git worktrees. dibs decides which worktree each container runs at any moment.\n\n")
+	if subagent {
+		b.WriteString("- You are a subagent. Leases belong to the worktree, so you share them with the session that started you when you work in the same worktree. If it already holds what you need (see below), use it without taking again. Never run `dibs pass` for anything you did not take yourself.\n")
+	}
 	b.WriteString("- To test your changes against a running container (browser QA, e2e, requests to its port), first run `dibs take <containers or group> --wait` as a background command and wait for it to finish. It recreates those containers with your worktree mounted. Include `browser` if you will drive a browser.")
 	if groups := groupSummary(cfg); groups != "" {
 		b.WriteString(" Groups: " + groups + ".")
