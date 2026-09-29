@@ -24,6 +24,8 @@ Groups from the dibs config expand to several resources (the session primer list
 
 Take everything you need in **one** `take`. It is all-or-nothing, so it cannot deadlock. Taking more while holding something is refused if it could deadlock.
 
+Leases belong to the **worktree**, not to a session. A subagent working in the same worktree shares its parent's leases: it should use what the parent already holds, and never `dibs pass` something it did not take itself.
+
 ## Waiting
 
 `dibs take ... --wait` blocks until every resource is yours **and** each container has been recreated on your worktree and is ready. Other sessions may be ahead of you, so run it as a **background** command and let its completion wake you. Do not poll it and do not start testing before it returns. Its output tells you:

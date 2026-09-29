@@ -253,7 +253,7 @@ func TestClaudeSetupWritesSkill(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(data), "---\nname: dibs\n") {
 		t.Fatalf("skill not written: %v", err)
 	}
-	for _, want := range []string{`"PreToolUse"`, " guard --post", " context", "browser-mcp"} {
+	for _, want := range []string{`"PreToolUse"`, " guard --post", " context", `"SubagentStart"`, "browser-mcp"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("setup output should include %q:\n%s", want, out.String())
 		}
@@ -302,5 +302,28 @@ func TestPostHookTracksContainersBeforeDibsManagesThem(t *testing.T) {
 	})
 	if text := callPost(t, read); !strings.Contains(text, "qa-unmanaged was recreated") {
 		t.Fatalf("a container first used before dibs managed it must still be tracked:\n%s", text)
+	}
+}
+
+func TestContextHookPrimesSubagents(t *testing.T) {
+	w := newHookWorld(t)
+	var out bytes.Buffer
+	input := hookInput(t, map[string]any{"hook_event_name": "SubagentStart", "agent_id": "a1", "agent_type": "general-purpose", "cwd": w.a.Path})
+	Run([]string{"context"}, strings.NewReader(input), &out, &out)
+	var decoded struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("not JSON: %q", out.String())
+	}
+	if decoded.HookSpecificOutput.HookEventName != "SubagentStart" {
+		t.Fatalf("the event name must match the hook that fired: %q", decoded.HookSpecificOutput.HookEventName)
+	}
+	text := decoded.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(text, "You are a subagent") || !strings.Contains(text, "web: held by you") {
+		t.Fatalf("a subagent in the holder's worktree should learn it shares the lease:\n%s", text)
 	}
 }

@@ -253,8 +253,12 @@ func runContext(e *env, args []string) int {
 	if !guard.Relevant(h.cfg, h.st, h.caller) {
 		return exitOK
 	}
-	text := guard.Primer(h.cfg, h.st, h.caller, TmpDir(h.caller.Path), time.Now())
-	emitContext(e.stdout, "SessionStart", text)
+	event := "SessionStart"
+	if h.in.HookEventName == "SubagentStart" {
+		event = "SubagentStart"
+	}
+	text := guard.Primer(h.cfg, h.st, h.caller, TmpDir(h.caller.Path), time.Now(), event == "SubagentStart")
+	emitContext(e.stdout, event, text)
 	return exitOK
 }
 

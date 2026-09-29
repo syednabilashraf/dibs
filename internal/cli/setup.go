@@ -44,6 +44,9 @@ func runClaudeSetup(e *env, args []string) int {
 			"matcher": "startup|resume|clear|compact|fork",
 			"hooks":   []any{map[string]any{"type": "command", "command": binary + " context"}},
 		}},
+		"SubagentStart": []any{map[string]any{
+			"hooks": []any{map[string]any{"type": "command", "command": binary + " context"}},
+		}},
 	}}
 	data, _ := json.MarshalIndent(hooks, "", "  ")
 	e.printf("Merge these hooks into ~/.claude/settings.json (keep any hooks you already have):\n\n%s\n\n", data)
