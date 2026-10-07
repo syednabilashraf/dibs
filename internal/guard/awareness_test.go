@@ -125,6 +125,9 @@ func TestPrimerAndRelevance(t *testing.T) {
 	if !strings.Contains(text, "ask the user before applying a schema migration") {
 		t.Fatal("every primer should mention the shared database")
 	}
+	if !strings.Contains(text, "knows this session only by its working directory") || !strings.Contains(text, "One worktree per session is enough") {
+		t.Fatal("every primer should explain session identity and one worktree per session")
+	}
 	st.Resources["web"].BaselineRoots = []string{w.main.Path}
 	inBaseline := Primer(w.cfg, st, w.main, "/tmp/dibs-app-12345678", now, false)
 	for _, want := range []string{"IMPORTANT: this session is running in " + w.main.Path, "The containers api, web run this code", "EnterWorktree", "dibs blocks edits and branch changes"} {

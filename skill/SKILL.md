@@ -26,12 +26,16 @@ Take everything you need in **one** `take`. It is all-or-nothing, so it cannot d
 
 Leases belong to the **worktree**, not to a session. A subagent working in the same worktree shares its parent's leases: it should use what the parent already holds, and never `dibs pass` something it did not take itself.
 
+dibs knows your session only by its **working directory**, not by `cd` inside a command. Take, test, check and pass from the worktree your session runs in. To work in a different worktree, move the session there with EnterWorktree (`path`) instead of prefixing commands with `cd`; a `dibs take` for another worktree is refused, because the lease would not count as yours.
+
+One worktree per session is enough. For a follow-up PR, switch branches inside it once the previous branch is pushed. Use a second worktree only when two branches must be checked out at the same time.
+
 ## If your session starts in the baseline checkout
 
 The baseline checkout is the one the shared containers run by default (usually the main clone), and the session primer names it. Every session without a lease is testing that code, so:
 
 - Read, search and plan there as much as you like.
-- **Before editing any file, create a worktree for your task** and work only inside it. Use the EnterWorktree tool if you have it; otherwise run `git worktree add ../<name> -b <branch>` and use that directory for every edit, command and `dibs take`.
+- **Before editing any file, create one worktree for this session and move the session into it.** The EnterWorktree tool does both; pass it `path` to enter a worktree you created with `git worktree add ../<name> -b <branch>`. If you cannot move the session, ask the user to start a session in the worktree.
 - Never switch branches, pull, stash or reset in the baseline checkout. The dibs hook blocks edits and branch changes there.
 
 If `dibs take` says your worktree is the baseline checkout, you are in the wrong place: make a worktree and take from there.
