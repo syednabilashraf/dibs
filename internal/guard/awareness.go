@@ -111,6 +111,7 @@ func Primer(cfg *config.Config, st *state.State, caller *tree.Tree, tmpdir strin
 		b.WriteString(" Groups: " + groups + ".")
 	}
 	b.WriteString("\n")
+	b.WriteString("- dibs knows this session only by its working directory, not by `cd` inside a command. Take, test, check and pass from the worktree the session runs in. To work in a different worktree, move the session there with the EnterWorktree tool (`path`); `dibs take` for another worktree is refused. One worktree per session is enough: switch branches inside it for follow-up work once the previous branch is pushed.\n")
 	b.WriteString("- After each batch of tests run `dibs check`. Exit code 2 means a container stopped serving your worktree: discard those results and take again.\n")
 	b.WriteString("- Run `dibs pass` as soon as you finish testing, not at the end of the session. Others may be waiting.\n")
 	b.WriteString("- Never restart, recreate, rebuild or re-point shared containers yourself, and never switch branches in another worktree. The dibs hook blocks these; do not work around it.\n")

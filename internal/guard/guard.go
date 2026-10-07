@@ -64,7 +64,25 @@ func Decide(cfg *config.Config, st *state.State, caller *tree.Tree, in Input, no
 		return v.edit(in)
 	}
 	if in.ToolName == "Bash" {
+		if d := v.dibsIdentity(in.ToolInput.Command, in.CWD); d.Deny {
+			return d
+		}
 		return v.bash(StripDibs(in.ToolInput.Command), in.CWD)
+	}
+	return allow()
+}
+
+func (v view) dibsIdentity(command, cwd string) Decision {
+	for _, target := range dibsTakeTargets(command, cwd) {
+		t, err := tree.Resolve(target)
+		if err != nil || t.Path == v.self {
+			continue
+		}
+		where := "outside any git worktree"
+		if v.self != "" {
+			where = "in " + v.self
+		}
+		return deny("this session runs %s, but this command takes containers for %s. dibs knows a session only by its working directory, so a lease taken for another worktree would belong to that worktree, and your own browser calls, port checks and notes would then be treated as someone else's. Move the session into %s first with the EnterWorktree tool (path: %s), then run `dibs take` there without `cd` or `--tree`. If you cannot move the session, ask the user to start a session in that worktree.", where, t.Path, t.Path, t.Path)
 	}
 	return allow()
 }
@@ -183,7 +201,7 @@ func (v view) browser() Decision {
 				return deny("switching %s to your worktree was interrupted. Run `dibs take %s` again to finish it.", name, name)
 			}
 			if r.Status == state.StatusFailed {
-				return deny("%s failed to start on your worktree. Check `dibs status` and `docker logs %s`, fix it, then run `dibs take %s` again.", name, name, name)
+				return deny("%s failed to start on your worktree. Check `docker logs %s` and fix it (often missing dependencies, which you can install inside the container), then run `dibs take %s` again to re-check it without recreating it. Or `dibs pass` to put it back on the baseline.", name, name, name)
 			}
 			if mine.NoSwap {
 				continue
@@ -389,14 +407,59 @@ var gitMutating = map[string]bool{
 	"stash": true, "restore": true, "clean": true, "cherry-pick": true, "revert": true, "am": true,
 }
 
+func segmentFields(segment string) []string {
+	fields := strings.Fields(strings.TrimRight(strings.TrimLeft(strings.TrimSpace(segment), "("), ")"))
+	for len(fields) > 0 && strings.Contains(fields[0], "=") && !strings.HasPrefix(fields[0], "-") {
+		fields = fields[1:]
+	}
+	return fields
+}
+
+func isDibs(word string) bool {
+	return word == "dibs" || strings.HasSuffix(word, "/dibs")
+}
+
+func dibsTakeTargets(command, cwd string) []string {
+	dir := cwd
+	targets := []string{}
+	for _, segment := range commandSegments(command) {
+		fields := segmentFields(segment)
+		if len(fields) == 0 {
+			continue
+		}
+		if (fields[0] == "cd" || fields[0] == "pushd") && len(fields) > 1 {
+			dir = resolveDir(dir, fields[1])
+			continue
+		}
+		if !isDibs(fields[0]) || len(fields) < 2 || (fields[1] != "take" && fields[1] != "grab") {
+			continue
+		}
+		target := dir
+		for i := 2; i < len(fields); i++ {
+			switch {
+			case fields[i] == "--tree" || fields[i] == "-tree":
+				if i+1 < len(fields) {
+					target = resolveDir(dir, fields[i+1])
+					i++
+				}
+			case strings.HasPrefix(fields[i], "--tree="):
+				target = resolveDir(dir, strings.TrimPrefix(fields[i], "--tree="))
+			case strings.HasPrefix(fields[i], "-tree="):
+				target = resolveDir(dir, strings.TrimPrefix(fields[i], "-tree="))
+			}
+		}
+		if target != "" {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
 func gitTargets(command, cwd string) []string {
 	dir := cwd
 	targets := []string{}
-	for _, segment := range separator.Split(command, -1) {
-		fields := strings.Fields(strings.TrimRight(strings.TrimLeft(strings.TrimSpace(segment), "("), ")"))
-		for len(fields) > 0 && strings.Contains(fields[0], "=") && !strings.HasPrefix(fields[0], "-") {
-			fields = fields[1:]
-		}
+	for _, segment := range commandSegments(command) {
+		fields := segmentFields(segment)
 		if len(fields) == 0 {
 			continue
 		}
@@ -443,18 +506,74 @@ func resolveDir(base, raw string) string {
 	return raw
 }
 
-var separator = regexp.MustCompile(`&&|\|\||[;|&\n]`)
+var heredocStart = regexp.MustCompile(`<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)(['"]?)`)
+
+func stripHeredocs(command string) string {
+	lines := strings.Split(command, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		loc := heredocStart.FindStringSubmatchIndex(lines[i])
+		if loc == nil || (loc[0] > 0 && lines[i][loc[0]-1] == '<') {
+			continue
+		}
+		delimiter := lines[i][loc[4]:loc[5]]
+		for i+1 < len(lines) {
+			i++
+			if strings.TrimLeft(lines[i], "\t") == delimiter {
+				break
+			}
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func splitSegments(command string) []string {
+	segments := []string{}
+	var current strings.Builder
+	inSingle, inDouble := false, false
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		switch {
+		case c == '\\' && !inSingle && i+1 < len(runes):
+			current.WriteRune(c)
+			i++
+			current.WriteRune(runes[i])
+			continue
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case !inSingle && !inDouble && (c == ';' || c == '\n' || c == '|' || c == '&'):
+			segments = append(segments, current.String())
+			current.Reset()
+			if (c == '&' || c == '|') && i+1 < len(runes) && runes[i+1] == c {
+				i++
+			}
+			continue
+		}
+		current.WriteRune(c)
+	}
+	return append(segments, current.String())
+}
+
+func commandSegments(command string) []string {
+	return splitSegments(stripHeredocs(command))
+}
 
 func StripDibs(command string) string {
+	command = stripHeredocs(command)
+	segments := splitSegments(command)
 	kept := []string{}
-	for _, segment := range separator.Split(command, -1) {
+	for _, segment := range segments {
 		fields := strings.Fields(segment)
-		if len(fields) > 0 && (fields[0] == "dibs" || strings.HasSuffix(fields[0], "/dibs")) {
+		if len(fields) > 0 && isDibs(fields[0]) {
 			continue
 		}
 		kept = append(kept, segment)
 	}
-	if len(kept) == len(separator.Split(command, -1)) {
+	if len(kept) == len(segments) {
 		return command
 	}
 	return strings.Join(kept, " ; ")

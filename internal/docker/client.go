@@ -196,6 +196,25 @@ func (c *Client) Logs(ctx context.Context, id string, since time.Time, tty bool)
 	return Demux(&buf)
 }
 
+func (c *Client) WritableSize(ctx context.Context, id string) (int64, error) {
+	var sized struct {
+		SizeRw int64 `json:"SizeRw"`
+	}
+	err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/json", url.Values{"size": {"1"}}, nil, &sized)
+	return sized.SizeRw, err
+}
+
+type FileChange struct {
+	Path string `json:"Path"`
+	Kind int    `json:"Kind"`
+}
+
+func (c *Client) Changes(ctx context.Context, id string) ([]FileChange, error) {
+	var changes []FileChange
+	err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/changes", nil, nil, &changes)
+	return changes, err
+}
+
 type Exec struct {
 	Running       bool `json:"Running"`
 	ProcessConfig struct {

@@ -116,7 +116,20 @@ func NewMapper() *Mapper {
 	return &Mapper{owners: map[string]*Tree{}}
 }
 
+const vmHostPrefix = "/host_mnt"
+
+func HostPath(source string) (host, prefix string) {
+	if strings.HasPrefix(source, vmHostPrefix+"/") {
+		stripped := strings.TrimPrefix(source, vmHostPrefix)
+		if _, err := os.Stat(stripped); err == nil {
+			return stripped, vmHostPrefix
+		}
+	}
+	return source, ""
+}
+
 func (m *Mapper) Owner(path string) *Tree {
+	path, _ = HostPath(path)
 	dir := Clean(path)
 	if info, err := os.Stat(dir); err != nil {
 		return nil
@@ -136,7 +149,8 @@ func (m *Mapper) Owner(path string) *Tree {
 
 func (m *Mapper) Map(source string, target *Tree) Change {
 	change := Change{Source: source, Result: source}
-	owner := m.Owner(source)
+	host, prefix := HostPath(source)
+	owner := m.Owner(host)
 	if owner == nil {
 		change.Foreign = true
 		change.Reason = "not inside a git worktree"
@@ -148,7 +162,7 @@ func (m *Mapper) Map(source string, target *Tree) Change {
 		change.Reason = "belongs to a different repository"
 		return change
 	}
-	rel, err := filepath.Rel(owner.Path, Clean(source))
+	rel, err := filepath.Rel(owner.Path, Clean(host))
 	if err != nil || strings.HasPrefix(rel, "..") {
 		change.Reason = "outside its worktree"
 		return change
@@ -158,10 +172,9 @@ func (m *Mapper) Map(source string, target *Tree) Change {
 		change.Reason = fmt.Sprintf("%s does not exist in %s", rel, target.Label)
 		return change
 	}
-	if candidate == Clean(source) {
-		candidate = source
-	}
-	change.Result = candidate
 	change.Mapped = true
+	if candidate != Clean(host) {
+		change.Result = prefix + candidate
+	}
 	return change
 }

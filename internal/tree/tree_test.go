@@ -146,3 +146,28 @@ func TestMapFromWorktreeToWorktree(t *testing.T) {
 		t.Fatalf("a baseline already on a worktree should still map: %+v", change)
 	}
 }
+
+func TestMapDockerDesktopHostPrefix(t *testing.T) {
+	f := setup(t)
+	target, _ := Resolve(f.worktree)
+	main, _ := Resolve(f.main)
+	m := NewMapper()
+
+	source := "/host_mnt" + filepath.Join(main.Path, "web")
+	change := m.Map(source, target)
+	if !change.Changed() || change.Result != "/host_mnt"+filepath.Join(target.Path, "web") {
+		t.Fatalf("a /host_mnt source must map and keep its prefix: %+v", change)
+	}
+	if change.Root != main.Path {
+		t.Fatalf("root = %s", change.Root)
+	}
+	if owner := m.Owner(source); owner == nil || owner.Path != main.Path {
+		t.Fatalf("owner of a /host_mnt path = %+v", owner)
+	}
+	if same := m.Map(source, main); !same.Mapped || same.Changed() || same.Result != source {
+		t.Fatalf("mapping onto its own tree must leave the source untouched: %+v", same)
+	}
+	if host, prefix := HostPath("/host_mnt/definitely/not/here"); prefix != "" || host != "/host_mnt/definitely/not/here" {
+		t.Fatalf("a /host_mnt path with no host counterpart is left alone: %q %q", host, prefix)
+	}
+}

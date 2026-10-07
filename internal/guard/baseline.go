@@ -66,7 +66,7 @@ func baselineWhat(containers []string) string {
 }
 
 func worktreeAdvice() string {
-	return "Create a worktree for your task first: use the EnterWorktree tool if you have it, otherwise run `git worktree add ../<name> -b <branch>` and do all of your work inside that directory. Reading, searching and planning here are fine."
+	return "Create one worktree for this session and move the session into it before changing anything: the EnterWorktree tool does both, or pass it `path` to enter a worktree you made with `git worktree add ../<name> -b <branch>`. If you cannot move the session, ask the user to start a session in the worktree. One worktree per session is enough: for follow-up work, switch branches inside it once the previous branch is pushed. Reading, searching and planning here are fine."
 }
 
 func baselineSelfMessage(root string, containers []string) string {

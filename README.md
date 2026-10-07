@@ -31,6 +31,8 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
   - its Docker healthcheck passes; or
   - the configured log line, HTTP or TCP probes pass; or
   - it has been running for a few seconds.
+- **Failed starts.** If a container does not become ready, the taker keeps the lease, so nobody else silently gets a broken container, and is told how to recover: fix it in place and take again (no recreate), or pass. Passing a container that failed to start puts it back on the baseline.
+- **Dropped changes.** The first time dibs recreates a container it did not create, it lists files changed inside it outside volumes (packages installed at runtime, say) and warns that the recreate drops them, since the baseline snapshot cannot capture them.
 - **Checking.** `dibs check` confirms you still hold everything and that each live container is still the one dibs created for your worktree. It catches expired leases, human takeovers and containers recreated behind dibs' back.
 
 ### Claude Code integration
@@ -41,6 +43,8 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
   - hitting a container's published port while it serves someone else;
   - switching branches in another worktree;
   - editing files or changing branches in the baseline checkout (the checkout the containers run by default, usually the main clone), including from a session that started there. That session is told to create a worktree instead.
+
+  - taking containers for a worktree other than the session's own working directory (the session would not be recognised as the holder), with a pointer to EnterWorktree.
 
   It prints nothing unless it denies, so your normal permission prompts still apply, and it fails open on its own errors. It is a safety net, not a security boundary.
 - **Primer (SessionStart and SubagentStart).** Sessions in a repository with managed containers start knowing the rules and who holds what. A session that starts in the baseline checkout is told to create a worktree before changing anything, and every session is reminded that databases are shared. The primer is re-injected after compaction. Subagents get it too, with a reminder that they share their parent's leases (leases belong to the worktree) and must not pass what they did not take.
@@ -135,6 +139,7 @@ Exit codes: 0 yes, 2 no, 1 error.
 ## Caveats
 
 - A swap recreates the container. Anything written to its filesystem outside volumes is gone, just as with any recreate.
+- Bind sources reported through Docker Desktop's VM path (`/host_mnt/...`) are mapped to the host paths they stand for, and keep their prefix when re-pointed.
 - Only bind mounts whose source is inside the same repository are re-pointed. A path that exists in the baseline checkout but not in your worktree (gitignored data, say) keeps its baseline source, and `take` says so.
 - A container with no bind mount from the repository cannot serve a worktree. `--no-swap` still locks it.
 - The database and other shared services stay shared. Schema changes made by one worktree are visible to all.

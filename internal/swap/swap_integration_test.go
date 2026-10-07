@@ -3,6 +3,7 @@ package swap
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -285,11 +286,34 @@ func TestIntegrationReadinessFailureMarksFailed(t *testing.T) {
 	r.swapper.Config.Containers[r.container] = config.Container{Ready: config.Ready{Log: "never printed"}}
 	r.swapper.Config.ReadyTimeout = config.Duration(2 * time.Second)
 	_, err := r.swapper.Serve(context.Background(), r.container, r.feature)
-	if err == nil || !strings.Contains(err.Error(), "not ready") {
+	if !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), "not ready after") {
 		t.Fatalf("expected a readiness failure, got %v", err)
 	}
 	st, _ := r.swapper.Store.Read()
 	if st.Lookup(r.container).Status != state.StatusFailed {
 		t.Fatalf("status should be failed: %+v", st.Lookup(r.container))
+	}
+}
+
+func TestIntegrationWarnsAboutDroppedRuntimeChanges(t *testing.T) {
+	r := newRig(t)
+	r.exec(t, "mkdir -p /opt/venv/lib/python3.12/site-packages/extra/__pycache__ /tmp/scratch && touch /opt/venv/lib/python3.12/site-packages/extra/__init__.py /opt/venv/lib/python3.12/site-packages/extra/__pycache__/x.pyc /tmp/scratch/y")
+	outcome, err := r.swapper.Serve(context.Background(), r.container, r.feature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Dropped.Files != 1 || !outcome.Dropped.Listed || !strings.Contains(r.log.String(), "site-packages (1)); recreating it drops them, and dibs keeps no copy of them") {
+		t.Fatalf("the swap should warn about runtime changes it drops: %+v\n%s", outcome.Dropped, r.log)
+	}
+	if strings.Contains(r.log.String(), "/tmp/scratch") {
+		t.Fatalf("scratch files are not worth a warning:\n%s", r.log)
+	}
+	r.exec(t, "mkdir -p /opt/venv/lib/python3.12/site-packages/more && touch /opt/venv/lib/python3.12/site-packages/more/x.py")
+	r.log.Reset()
+	if _, err := r.swapper.Serve(context.Background(), r.container, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.log.String(), "recreating it drops them") {
+		t.Fatalf("containers dibs created are not checked; the holder made those changes itself:\n%s", r.log)
 	}
 }

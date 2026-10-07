@@ -25,6 +25,7 @@ import (
 var (
 	ErrNoRepoMounts = errors.New("none of its bind mounts come from this repository, so it cannot serve your worktree")
 	ErrInterrupted  = errors.New("interrupted")
+	ErrNotReady     = errors.New("not ready")
 )
 
 type Swapper struct {
@@ -47,6 +48,7 @@ type Outcome struct {
 	Kept          []tree.Change
 	Waited        time.Duration
 	Interrupted   []string
+	Dropped       Dropped
 }
 
 type Meta struct {
@@ -193,6 +195,12 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 	oldID := ""
 	if live != nil {
 		oldID = summary.ID
+		if summary.Label(LabelManaged) == "" {
+			outcome.Dropped = s.dropped(ctx, oldID, live)
+		}
+		if outcome.Dropped.Worth() {
+			s.printf("%s: the original container has %s; recreating it drops them, and dibs keeps no copy of them\n", name, outcome.Dropped)
+		}
 	}
 	id, interrupted, err := s.recreate(ctx, oldID, spec)
 	if err != nil {
@@ -212,10 +220,36 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 
 	if err := s.WaitReady(ctx, name, id); err != nil {
 		s.setStatus(name, state.StatusFailed)
+		if outcome.Dropped.Worth() {
+			return outcome, fmt.Errorf("%s: %w\nThe original container had %s, and this recreate dropped them; the code it now runs may depend on them (for example packages installed at runtime: reinstall them in the container, or rebuild its image)", name, err, outcome.Dropped)
+		}
 		return outcome, fmt.Errorf("%s: %w", name, err)
 	}
 	s.setStatus(name, state.StatusReady)
 	return outcome, nil
+}
+
+func (s *Swapper) dropped(parent context.Context, id string, live map[string]any) Dropped {
+	sizeCtx, cancelSize := context.WithTimeout(parent, 20*time.Second)
+	defer cancelSize()
+	size, err := s.Docker.WritableSize(sizeCtx, id)
+	if err != nil || size == 0 {
+		return Dropped{}
+	}
+	d := Dropped{Bytes: size}
+	diffCtx, cancelDiff := context.WithTimeout(parent, 45*time.Second)
+	defer cancelDiff()
+	changes, err := s.Docker.Changes(diffCtx, id)
+	if err != nil {
+		return d
+	}
+	mounts := []string{}
+	for _, m := range list(live["Mounts"]) {
+		mounts = append(mounts, str(obj(m)["Destination"]))
+	}
+	listed := SummarizeChanges(changes, mounts)
+	d.Files, d.Groups, d.Listed = listed.Files, listed.Groups, true
+	return d
 }
 
 func (s *Swapper) plan(baseline map[string]any, target *tree.Tree, mapper *tree.Mapper) (*Spec, string, string, error) {
@@ -453,7 +487,7 @@ func (s *Swapper) WaitReady(ctx context.Context, name, id string) error {
 		summary := docker.Summarize(raw)
 		if !summary.Running {
 			logs, _ := s.Docker.Logs(ctx, id, time.Time{}, summary.Tty)
-			return fmt.Errorf("exited during startup (%s); last output:\n%s", summary.Status, tail(logs, 20))
+			return fmt.Errorf("%w: exited during startup (%s); last output:\n%s", ErrNotReady, summary.Status, tail(logs, 20))
 		}
 		ok := true
 		if summary.HasHealthcheck {
@@ -477,7 +511,7 @@ func (s *Swapper) WaitReady(ctx context.Context, name, id string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("not ready after %s (healthcheck=%v log=%v http=%v tcp=%v)", s.Config.ReadyTimeout.D(), summary.Health, logSeen, httpSeen, tcpSeen)
+			return fmt.Errorf("%w after %s (healthcheck=%v log=%v http=%v tcp=%v)", ErrNotReady, s.Config.ReadyTimeout.D(), summary.Health, logSeen, httpSeen, tcpSeen)
 		}
 		if !announced && (probes || summary.HasHealthcheck) {
 			s.printf("%s: waiting for it to become ready\n", name)
