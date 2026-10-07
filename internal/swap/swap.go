@@ -25,6 +25,7 @@ import (
 var (
 	ErrNoRepoMounts = errors.New("none of its bind mounts come from this repository, so it cannot serve your worktree")
 	ErrInterrupted  = errors.New("interrupted")
+	ErrNotReady     = errors.New("not ready")
 )
 
 type Swapper struct {
@@ -453,7 +454,7 @@ func (s *Swapper) WaitReady(ctx context.Context, name, id string) error {
 		summary := docker.Summarize(raw)
 		if !summary.Running {
 			logs, _ := s.Docker.Logs(ctx, id, time.Time{}, summary.Tty)
-			return fmt.Errorf("exited during startup (%s); last output:\n%s", summary.Status, tail(logs, 20))
+			return fmt.Errorf("%w: exited during startup (%s); last output:\n%s", ErrNotReady, summary.Status, tail(logs, 20))
 		}
 		ok := true
 		if summary.HasHealthcheck {
@@ -477,7 +478,7 @@ func (s *Swapper) WaitReady(ctx context.Context, name, id string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("not ready after %s (healthcheck=%v log=%v http=%v tcp=%v)", s.Config.ReadyTimeout.D(), summary.Health, logSeen, httpSeen, tcpSeen)
+			return fmt.Errorf("%w after %s (healthcheck=%v log=%v http=%v tcp=%v)", ErrNotReady, s.Config.ReadyTimeout.D(), summary.Health, logSeen, httpSeen, tcpSeen)
 		}
 		if !announced && (probes || summary.HasHealthcheck) {
 			s.printf("%s: waiting for it to become ready\n", name)

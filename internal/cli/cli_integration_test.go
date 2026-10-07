@@ -188,6 +188,52 @@ func TestCLITakeFromBaselineWarns(t *testing.T) {
 	}
 }
 
+func TestCLIFailedStartKeepsTheLeaseAndPassRestores(t *testing.T) {
+	s := newStack(t)
+	home := os.Getenv("DIBS_HOME")
+	broken := fmt.Sprintf(`
+stop_timeout: 1s
+exec_grace: 0s
+ready_timeout: 2s
+containers:
+  %s:
+    ready:
+      log: 'never printed'
+`, s.container)
+	os.WriteFile(filepath.Join(home, "config.yaml"), []byte(broken), 0o644)
+
+	code, out := dibs(t, "take", s.container, "--tree", s.a)
+	if code != exitError || !strings.Contains(out, "you still hold") || !strings.Contains(out, "not ready after") {
+		t.Fatalf("a failed start must keep the lease and explain how to recover: %d\n%s", code, out)
+	}
+	if got := s.serves(t); got != "ticket-a" {
+		t.Fatalf("the container stays on the worktree for the holder to fix, serves %q", got)
+	}
+	if code, out := dibs(t, "take", s.container, "--tree", s.b); code != exitNo || !strings.Contains(out, "held by ticket-a") {
+		t.Fatalf("others must queue rather than get the broken container: %d\n%s", code, out)
+	}
+	if code, _ := dibs(t, "check", "--tree", s.a); code != exitNo {
+		t.Fatal("check must fail while the container is not ready")
+	}
+
+	healthy := fmt.Sprintf(`
+stop_timeout: 1s
+exec_grace: 0s
+containers:
+  %s:
+    ready:
+      settle: 500ms
+`, s.container)
+	os.WriteFile(filepath.Join(home, "config.yaml"), []byte(healthy), 0o644)
+	code, out = dibs(t, "pass", "--tree", s.a)
+	if code != exitOK || !strings.Contains(out, "goes back on the baseline") {
+		t.Fatalf("passing a failed container should restore it: %d\n%s", code, out)
+	}
+	if got := s.serves(t); got != "main" {
+		t.Fatalf("after pass the failed container must be back on the baseline, serves %q", got)
+	}
+}
+
 func TestCLIUnknownResource(t *testing.T) {
 	s := newStack(t)
 	code, out := dibs(t, "take", "no-such-thing", "--tree", s.a)

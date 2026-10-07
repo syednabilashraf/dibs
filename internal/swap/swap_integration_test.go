@@ -3,6 +3,7 @@ package swap
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -285,7 +286,7 @@ func TestIntegrationReadinessFailureMarksFailed(t *testing.T) {
 	r.swapper.Config.Containers[r.container] = config.Container{Ready: config.Ready{Log: "never printed"}}
 	r.swapper.Config.ReadyTimeout = config.Duration(2 * time.Second)
 	_, err := r.swapper.Serve(context.Background(), r.container, r.feature)
-	if err == nil || !strings.Contains(err.Error(), "not ready") {
+	if !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), "not ready after") {
 		t.Fatalf("expected a readiness failure, got %v", err)
 	}
 	st, _ := r.swapper.Store.Read()

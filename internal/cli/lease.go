@@ -126,6 +126,11 @@ func runTake(e *env, args []string) int {
 			a.report(outcome)
 		}
 		if err != nil {
+			if errors.Is(err, swap.ErrNotReady) {
+				e.errorf("%v", err)
+				e.printf("dibs: you still hold %s, so others wait until you pass or your lease ends. %s failed to start on your worktree: fix it (for example install the dependencies your branch needs inside the container), then run `dibs take %s` again, which re-checks it without recreating it. Or run `dibs pass`: a container that failed to start goes back on the baseline when passed.\n", strings.Join(names, ", "), name, strings.Join(positional, " "))
+				return exitError
+			}
 			a.release(t.Path, names)
 			if errors.Is(err, swap.ErrInterrupted) {
 				return e.errorf("interrupted after %s was recreated; released %s", name, strings.Join(names, ", "))
@@ -253,12 +258,19 @@ func runPass(e *env, args []string) int {
 		return e.errorf("%v", err)
 	}
 	names := a.cfg.Expand(positional)
-	var released []string
+	var released, failed []string
 	if err := a.store.Update(func(st *state.State) error {
 		a.prune(st)
-		released = queue.Pass(st, t.Path, names, time.Now())
+		now := time.Now()
+		released = queue.Pass(st, t.Path, names, now)
 		if len(names) == 0 {
 			queue.Leave(st, t.Path)
+		}
+		for _, name := range released {
+			r := st.Lookup(name)
+			if !r.Virtual && r.Status == state.StatusFailed && r.Serving == t.Path && r.ActiveHolder(now) == nil {
+				failed = append(failed, name)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -270,12 +282,18 @@ func runPass(e *env, args []string) int {
 	}
 	a.store.Log(state.Event{Kind: "pass", Resource: strings.Join(released, ","), Tree: t.Path, Label: t.Label})
 	e.printf("dibs: passed %s\n", strings.Join(released, ", "))
-	if !*restore {
+	toRestore := failed
+	if *restore {
+		toRestore = a.split(released)
+	} else if len(failed) > 0 {
+		e.printf("dibs: %s failed to start on your worktree, so it goes back on the baseline\n", strings.Join(failed, ", "))
+	}
+	if len(toRestore) == 0 {
 		return exitOK
 	}
 	ctx, cancel := contextWithSignals()
 	defer cancel()
-	return a.restore(ctx, t, a.split(released))
+	return a.restore(ctx, t, toRestore)
 }
 
 func runCheck(e *env, args []string) int {
