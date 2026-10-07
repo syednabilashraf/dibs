@@ -98,6 +98,11 @@ func Primer(cfg *config.Config, st *state.State, caller *tree.Tree, tmpdir strin
 	var b strings.Builder
 	b.WriteString("Shared Docker containers are coordinated by dibs.\n\n")
 	b.WriteString("This repository's local containers are shared with other agent sessions working in other git worktrees. dibs decides which worktree each container runs at any moment.\n\n")
+	if caller != nil {
+		if containers, ok := BaselineRoots(cfg, st)[caller.Path]; ok {
+			b.WriteString(BaselineWarning(caller.Path, containers, cfg.Guard.ProtectsBaseline()) + "\n\n")
+		}
+	}
 	if subagent {
 		b.WriteString("- You are a subagent. Leases belong to the worktree, so you share them with the session that started you when you work in the same worktree. If it already holds what you need (see below), use it without taking again. Never run `dibs pass` for anything you did not take yourself.\n")
 	}
@@ -110,10 +115,23 @@ func Primer(cfg *config.Config, st *state.State, caller *tree.Tree, tmpdir strin
 	b.WriteString("- Run `dibs pass` as soon as you finish testing, not at the end of the session. Others may be waiting.\n")
 	b.WriteString("- Never restart, recreate, rebuild or re-point shared containers yourself, and never switch branches in another worktree. The dibs hook blocks these; do not work around it.\n")
 	b.WriteString("- Unit tests need no lease: copy your code into the container under `" + tmpdir + "` (unique to this worktree, so it cannot collide with other sessions) and run them there with `docker exec`. Another session's `dibs take` can still recreate that container, which kills commands running in it and deletes everything copied into it. If that happens you will be told; copy again and rerun.\n")
+	b.WriteString("- Databases and other stateful services are shared by every worktree. A migration or data you apply is seen by all sessions and can break containers built from other checkouts, so ask the user before applying a schema migration to a shared database.\n")
 	b.WriteString("- `dibs status` shows who holds what. The dibs skill has the full protocol.\n")
 	b.WriteString("\nRight now:\n")
 	b.WriteString(Snapshot(st, caller, now))
 	return b.String()
+}
+
+func BaselineWarning(root string, containers []string, enforced bool) string {
+	subject := "The shared containers"
+	if len(containers) > 0 {
+		subject = "The containers " + strings.Join(containers, ", ")
+	}
+	text := fmt.Sprintf("IMPORTANT: this session is running in %s, the baseline checkout. %s run this code for every session that does not hold a lease, so editing files or switching branches here changes what everyone is testing. Do not change anything here. %s", root, subject, worktreeAdvice())
+	if enforced {
+		text += " dibs blocks edits and branch changes in this checkout."
+	}
+	return text
 }
 
 func groupSummary(cfg *config.Config) string {

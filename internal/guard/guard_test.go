@@ -238,7 +238,7 @@ func TestGitInOtherWorktrees(t *testing.T) {
 		{"git checkout -b mine", w.b.Path, false, ""},
 		{"git -C " + w.b.Path + " switch main", w.b.Path, false, ""},
 		{"git -C " + w.main.Path + " log --oneline", w.b.Path, false, ""},
-		{"git -C " + w.main.Path + " checkout main", w.main.Path, false, ""},
+		{"git -C " + w.main.Path + " checkout main", w.main.Path, true, "is the baseline checkout"},
 	}
 	for _, c := range cases {
 		caller, _ := tree.Resolve(c.cwd)
@@ -246,6 +246,107 @@ func TestGitInOtherWorktrees(t *testing.T) {
 		if d.Deny != c.deny || (c.reason != "" && !strings.Contains(d.Reason, c.reason)) {
 			t.Errorf("%q from %s: deny = %v (%s)", c.command, filepath.Base(c.cwd), d.Deny, d.Reason)
 		}
+	}
+}
+
+func editCall(tool, path, cwd string) Input {
+	in := Input{ToolName: tool, CWD: cwd}
+	if tool == "NotebookEdit" {
+		in.ToolInput.NotebookPath = path
+	} else {
+		in.ToolInput.FilePath = path
+	}
+	return in
+}
+
+func TestBaselineEditsAreBlocked(t *testing.T) {
+	w := newWorld(t)
+	st := w.aHoldsEverything()
+	nested := filepath.Join(w.main.Path, ".claude", "worktrees", "nested")
+	gitRun(t, w.main.Path, "worktree", "add", "-q", "-b", "nested", nested)
+
+	cases := []struct {
+		name   string
+		in     Input
+		caller *tree.Tree
+		deny   bool
+	}{
+		{"edit in baseline from baseline", editCall("Edit", filepath.Join(w.main.Path, "web", "x"), w.main.Path), w.main, true},
+		{"new file in baseline", editCall("Write", filepath.Join(w.main.Path, "web", "new", "deep.ts"), w.main.Path), w.main, true},
+		{"relative path in baseline", editCall("Write", "web/x", w.main.Path), w.main, true},
+		{"edit in baseline from another worktree", editCall("MultiEdit", filepath.Join(w.main.Path, "web", "x"), w.b.Path), w.b, true},
+		{"notebook in baseline", editCall("NotebookEdit", filepath.Join(w.main.Path, "nb.ipynb"), w.main.Path), w.main, true},
+		{"edit in own worktree", editCall("Edit", filepath.Join(w.b.Path, "web", "x"), w.b.Path), w.b, false},
+		{"edit in nested worktree under baseline", editCall("Write", filepath.Join(nested, "web", "x"), w.main.Path), w.main, false},
+		{"edit outside any repo", editCall("Write", filepath.Join(t.TempDir(), "notes.md"), w.main.Path), w.main, false},
+	}
+	for _, c := range cases {
+		d := Decide(w.cfg, st, c.caller, c.in, now, alive)
+		if d.Deny != c.deny {
+			t.Errorf("%s: deny = %v (%s)", c.name, d.Deny, d.Reason)
+		}
+		if d.Deny && !strings.Contains(d.Reason, "EnterWorktree") {
+			t.Errorf("%s: the reason should say how to get a worktree: %s", c.name, d.Reason)
+		}
+	}
+}
+
+func TestBaselineGitFromInside(t *testing.T) {
+	w := newWorld(t)
+	st := w.aHoldsEverything()
+	cases := []struct {
+		command string
+		deny    bool
+	}{
+		{"git checkout -b feat/pins origin/main", true},
+		{"git pull", true},
+		{"git stash", true},
+		{"git -c core.pager=cat reset --hard HEAD~1", true},
+		{"git status && git switch main", true},
+		{"git stash list", false},
+		{"git status", false},
+		{"git fetch origin main", false},
+		{"git log --oneline -5", false},
+		{"git worktree add ../app-pins -b feat/pins origin/main", false},
+		{"git worktree add ../app-pins -b feat/pins && cd ../app-pins && git checkout -b other", false},
+		{"cd " + w.b.Path + " && git checkout -b feat", false},
+	}
+	for _, c := range cases {
+		d := Decide(w.cfg, st, w.main, bash(c.command, w.main.Path), now, alive)
+		if d.Deny != c.deny {
+			t.Errorf("%q from the baseline: deny = %v (%s)", c.command, d.Deny, d.Reason)
+		}
+	}
+	if d := Decide(w.cfg, st, w.b, bash("(cd "+w.main.Path+" && git pull)", w.b.Path), now, alive); !d.Deny {
+		t.Fatal("pulling in the baseline from another worktree must still be denied")
+	}
+}
+
+func TestBaselineProtectionCanBeDisabled(t *testing.T) {
+	w := newWorld(t)
+	st := w.aHoldsEverything()
+	off := false
+	w.cfg.Guard.ProtectBaseline = &off
+	if d := Decide(w.cfg, st, w.main, editCall("Edit", filepath.Join(w.main.Path, "web", "x"), w.main.Path), now, alive); d.Deny {
+		t.Fatalf("edits are allowed when protection is off: %s", d.Reason)
+	}
+	if d := Decide(w.cfg, st, w.main, bash("git checkout -b feat", w.main.Path), now, alive); d.Deny {
+		t.Fatalf("own-checkout git is allowed when protection is off: %s", d.Reason)
+	}
+	if d := Decide(w.cfg, st, w.b, bash("git -C "+w.main.Path+" checkout x", w.b.Path), now, alive); !d.Deny {
+		t.Fatal("changing the baseline from another worktree is always denied")
+	}
+}
+
+func TestConfiguredRepoIsBaselineBeforeAnythingIsManaged(t *testing.T) {
+	w := newWorld(t)
+	w.cfg.Repos = []string{w.main.Path}
+	d := Decide(w.cfg, state.New(), w.main, editCall("Edit", filepath.Join(w.main.Path, "web", "x"), w.main.Path), now, alive)
+	if !d.Deny || !strings.Contains(d.Reason, "the shared containers") {
+		t.Fatalf("a configured repo is the baseline even with nothing managed: %v %s", d.Deny, d.Reason)
+	}
+	if d := Decide(w.cfg, state.New(), w.b, editCall("Edit", filepath.Join(w.b.Path, "web", "x"), w.b.Path), now, alive); d.Deny {
+		t.Fatalf("worktrees of a configured repo are not the baseline: %s", d.Reason)
 	}
 }
 
