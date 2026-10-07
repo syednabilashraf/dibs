@@ -350,6 +350,38 @@ func TestConfiguredRepoIsBaselineBeforeAnythingIsManaged(t *testing.T) {
 	}
 }
 
+func TestTakeMustBeForTheSessionsOwnWorktree(t *testing.T) {
+	w := newWorld(t)
+	st := state.New()
+	cases := []struct {
+		command string
+		deny    bool
+	}{
+		{"dibs take ui --wait", false},
+		{"cd web && dibs take ui --wait", false},
+		{"cd " + w.b.Path + " && dibs take web", false},
+		{"cd ../app-a && dibs take ui --wait", true},
+		{"cd " + w.a.Path + " && ~/go/bin/dibs take web --wait 2>&1 | tail -5", true},
+		{"dibs take ui --tree ../app-a", true},
+		{"dibs take --tree=" + w.a.Path + " web", true},
+		{"dibs grab web --tree " + w.a.Path + " --note x", true},
+		{"cd ../app-a && dibs status", false},
+		{"cd ../app-a && dibs check", false},
+	}
+	for _, c := range cases {
+		d := Decide(w.cfg, st, w.b, bash(c.command, w.b.Path), now, alive)
+		if d.Deny != c.deny {
+			t.Errorf("%q: deny = %v (%s)", c.command, d.Deny, d.Reason)
+		}
+		if d.Deny && (!strings.Contains(d.Reason, "EnterWorktree") || !strings.Contains(d.Reason, w.a.Path)) {
+			t.Errorf("%q: the reason should name the worktree and how to move into it: %s", c.command, d.Reason)
+		}
+	}
+	if d := Decide(w.cfg, st, nil, bash("cd "+w.a.Path+" && dibs take web", t.TempDir()), now, alive); !d.Deny || !strings.Contains(d.Reason, "outside any git worktree") {
+		t.Fatalf("a session outside any worktree must not take for one: %s", d.Reason)
+	}
+}
+
 func TestNothingManagedAllowsEverything(t *testing.T) {
 	w := newWorld(t)
 	st := state.New()
