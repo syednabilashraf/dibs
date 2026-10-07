@@ -59,6 +59,12 @@ Without `--wait`, `dibs take` answers immediately: exit 0 means granted, exit 2 
 
 Databases and other stateful services are not swapped: every worktree uses the same ones. A schema migration you apply is seen by every session and can stop containers built from other checkouts from starting. Ask the user before applying one, and remove test data you add.
 
+## When a container fails to start on your worktree
+
+If `dibs take` says a container is not ready, you still hold it: others wait until you pass or your lease ends. Read its logs (`docker logs <container>`). A common cause is a branch that needs newer dependencies than the container's image has; you may install them inside the container you hold. Then run `dibs take <container>` again, which re-checks it without recreating it. If you give up, `dibs pass`: a container that failed to start goes back on the baseline when passed.
+
+If a take warns that the original container had changes outside its volumes (for example packages installed at runtime), those are gone once it is recreated. If the code the container runs needed them, it may fail to start; tell the user, since the real fix is usually rebuilding the image.
+
 ## Checking your results
 
 A lease can expire, a human can take over, or someone can recreate a container behind dibs' back. Tests keep passing in all of these cases, just against the wrong code. So:

@@ -127,7 +127,7 @@ sequenceDiagram
 The swap works from the container itself, so it needs no compose file, no wrapper and no environment variables.
 
 1. **Baseline.** The first time dibs touches a container it stores the Engine API's inspect document as the baseline. Containers dibs creates carry a `dibs.managed` label. A live container without that label, and with an id dibs did not record, was recreated by something else, so it becomes the new baseline.
-2. **Mount mapping.** For each bind source `S` (in `HostConfig.Binds` and in bind-type `HostConfig.Mounts`):
+2. **Mount mapping.** For each bind source `S` (in `HostConfig.Binds` and in bind-type `HostConfig.Mounts`; a Docker Desktop `/host_mnt/...` source is resolved to the host path it stands for and keeps its prefix when rewritten):
    - find the worktree that contains `S` by reading `.git` directly (no git subprocess), and its common git dir;
    - if that common dir matches the target worktree's, the new source is `target/rel(owner, S)`, provided that path exists;
    - otherwise `S` is kept and the take reports it.
@@ -194,6 +194,7 @@ A PreToolUse hook. It reads only config and state (no Docker calls) and prints n
 | Mutation | A container held by another worktree is named by `docker restart/stop/start/kill/rm/pause/unpause/update/rename`, or by a mutating compose subcommand. A compose command that names no service affects every service, unless its project differs. User `mutate_patterns` also count: with `{service}`/`{container}` placeholders they apply per held container, and without them they apply whenever anything is held by others. |
 | Use | The command targets the published port of a container serving another worktree, or matches `use_patterns` (e2e runners) while any container serves another worktree. |
 | Git | A branch-changing git command targets another worktree that serves a held container, or the baseline checkout. A bare git command targets the current directory, following any `cd` or `-C` earlier in the command. |
+| Identity | A `dibs take` or `dibs grab` is for a worktree other than the session's own (via `cd` or `--tree`). The lease would belong to that worktree while the hooks keep judging the session by its working directory, so the session would be treated as a stranger to its own lease. The message points to EnterWorktree. |
 | Baseline | The target is inside the baseline checkout (the source of the containers' baseline mounts, or a repository listed in config), even for a session that lives there: Edit/Write/NotebookEdit on its files, and branch-changing git in it. The message tells the session to create a worktree. Worktrees nested inside it are not the baseline. `guard.protect_baseline: false` turns this off. |
 
 `docker exec` and `docker cp` are always allowed. They are how unit tests run from scratch copies.
@@ -228,7 +229,8 @@ Every session drives the same Chrome and shares its login. The browser lock (`br
 | Take killed mid-swap | The intent record shows `swapping` with a dead pid (reported as stalled). A retake re-verifies readiness; a container missing mid-swap is recreated from the baseline. |
 | Create or start fails | The baseline is recreated, status is `failed`, and the lease is released. |
 | Container recreated outside dibs | `check` reports it (id mismatch). The next take adopts it as the baseline. |
-| Readiness never reached | Status is `failed`, the lease is released, and the browser guard tells the holder to look at the logs. |
+| Readiness never reached | Status is `failed` and the taker keeps the lease, so others queue instead of inheriting a broken container. The taker can fix it in place and take again (readiness is re-checked without a recreate), or pass; passing a failed container restores the baseline. |
+| Runtime changes in an original container | Before the first recreate of a container dibs did not create, its writable-layer changes are listed (bounded; noise such as scratch, logs, caches and bytecode is ignored, as are mount points) and the taker is warned that they will be dropped. A later readiness failure repeats the warning as the likely cause. |
 | A running exec blocks a swap | Wait up to `exec_grace`, then recreate. The affected session is told afterwards. |
 
 ## Testing
