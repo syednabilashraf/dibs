@@ -422,7 +422,7 @@ func isDibs(word string) bool {
 func dibsTakeTargets(command, cwd string) []string {
 	dir := cwd
 	targets := []string{}
-	for _, segment := range separator.Split(command, -1) {
+	for _, segment := range commandSegments(command) {
 		fields := segmentFields(segment)
 		if len(fields) == 0 {
 			continue
@@ -458,7 +458,7 @@ func dibsTakeTargets(command, cwd string) []string {
 func gitTargets(command, cwd string) []string {
 	dir := cwd
 	targets := []string{}
-	for _, segment := range separator.Split(command, -1) {
+	for _, segment := range commandSegments(command) {
 		fields := segmentFields(segment)
 		if len(fields) == 0 {
 			continue
@@ -506,18 +506,74 @@ func resolveDir(base, raw string) string {
 	return raw
 }
 
-var separator = regexp.MustCompile(`&&|\|\||[;|&\n]`)
+var heredocStart = regexp.MustCompile(`<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)(['"]?)`)
+
+func stripHeredocs(command string) string {
+	lines := strings.Split(command, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		loc := heredocStart.FindStringSubmatchIndex(lines[i])
+		if loc == nil || (loc[0] > 0 && lines[i][loc[0]-1] == '<') {
+			continue
+		}
+		delimiter := lines[i][loc[4]:loc[5]]
+		for i+1 < len(lines) {
+			i++
+			if strings.TrimLeft(lines[i], "\t") == delimiter {
+				break
+			}
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func splitSegments(command string) []string {
+	segments := []string{}
+	var current strings.Builder
+	inSingle, inDouble := false, false
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		switch {
+		case c == '\\' && !inSingle && i+1 < len(runes):
+			current.WriteRune(c)
+			i++
+			current.WriteRune(runes[i])
+			continue
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case !inSingle && !inDouble && (c == ';' || c == '\n' || c == '|' || c == '&'):
+			segments = append(segments, current.String())
+			current.Reset()
+			if (c == '&' || c == '|') && i+1 < len(runes) && runes[i+1] == c {
+				i++
+			}
+			continue
+		}
+		current.WriteRune(c)
+	}
+	return append(segments, current.String())
+}
+
+func commandSegments(command string) []string {
+	return splitSegments(stripHeredocs(command))
+}
 
 func StripDibs(command string) string {
+	command = stripHeredocs(command)
+	segments := splitSegments(command)
 	kept := []string{}
-	for _, segment := range separator.Split(command, -1) {
+	for _, segment := range segments {
 		fields := strings.Fields(segment)
 		if len(fields) > 0 && isDibs(fields[0]) {
 			continue
 		}
 		kept = append(kept, segment)
 	}
-	if len(kept) == len(separator.Split(command, -1)) {
+	if len(kept) == len(segments) {
 		return command
 	}
 	return strings.Join(kept, " ; ")

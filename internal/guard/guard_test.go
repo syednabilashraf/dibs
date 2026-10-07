@@ -382,6 +382,33 @@ func TestTakeMustBeForTheSessionsOwnWorktree(t *testing.T) {
 	}
 }
 
+func TestQuotedAndHeredocTextIsNotACommand(t *testing.T) {
+	w := newWorld(t)
+	st := w.aHoldsEverything()
+	takeElsewhere := "cd ../app-a && " + "dibs take ui"
+	body := "cat > /tmp/pr.md <<'EOF'\nThe session ran `" + takeElsewhere + " --wait` and then\ngit -C " + w.main.Path + " checkout main && docker restart web\nEOF\ngh pr create --body-file /tmp/pr.md"
+	cases := []struct {
+		command string
+		deny    bool
+	}{
+		{body, false},
+		{"git commit -m \"explain " + takeElsewhere + "\"", false},
+		{"echo 'cd ../app-a; " + "dibs take ui --tree ../app-a'", false},
+		{"cat <<-EOT\n\t" + "dibs take ui --tree ../app-a\n\tEOT", false},
+		{takeElsewhere, true},
+		{"cat <<'EOF' > x\nhello\nEOF\n" + takeElsewhere, true},
+	}
+	for _, c := range cases {
+		d := Decide(w.cfg, st, w.b, bash(c.command, w.b.Path), now, alive)
+		if d.Deny != c.deny {
+			t.Errorf("%q: deny = %v (%s)", c.command, d.Deny, d.Reason)
+		}
+	}
+	if got := StripDibs("cat <<EOF\ndocker restart web\nEOF\nls"); strings.Contains(got, "docker restart") {
+		t.Fatalf("heredoc bodies are data, not commands: %q", got)
+	}
+}
+
 func TestNothingManagedAllowsEverything(t *testing.T) {
 	w := newWorld(t)
 	st := state.New()
