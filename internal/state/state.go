@@ -31,11 +31,19 @@ type Holder struct {
 	NoSwap    bool      `json:"no_swap,omitempty"`
 	HoldSince time.Time `json:"hold_since,omitempty"`
 	Taker     int       `json:"taker,omitempty"`
+	Serve     string    `json:"serve,omitempty"`
 }
 
 func (h *Holder) Pinned() bool { return h != nil && h.Kind == KindManual }
 
 func (h *Holder) OnHold() bool { return h != nil && h.Kind == KindSession && !h.HoldSince.IsZero() }
+
+func (h *Holder) Target() string {
+	if h.Serve != "" {
+		return h.Serve
+	}
+	return h.Tree
+}
 
 func (h *Holder) Expired(now time.Time) bool {
 	return h != nil && h.Kind == KindSession && !h.Expires.IsZero() && now.After(h.Expires)
@@ -78,6 +86,7 @@ type Waiter struct {
 	PID       int           `json:"pid"`
 	Lease     time.Duration `json:"lease"`
 	NoSwap    bool          `json:"no_swap,omitempty"`
+	Serve     string        `json:"serve,omitempty"`
 	Since     time.Time     `json:"since"`
 }
 

@@ -83,6 +83,20 @@ If `dibs take` says a container failed to start (it exited, keeps crashing, or l
 
 If a take warns that the original container had changes outside its volumes (for example packages installed at runtime), those are gone once it is recreated. If the code the container runs needed them, it may fail to start; tell the user, since the real fix is usually rebuilding the image.
 
+## Before and after screenshots
+
+To show how the app looked before your change, have the containers serve another ref instead of switching your worktree's branch:
+
+```bash
+dibs take ui --ref origin/main --wait                     # containers serve a checkout of origin/main
+dibs take ui --ref origin/main --patch flags.patch --wait # same, with local patches applied (a feature flag, say)
+# ... before screenshots ...
+dibs take ui --wait                                       # back to your worktree
+# ... after screenshots ...
+```
+
+The checkout is managed by dibs; never edit it. `git fetch` first if the ref should be current. `dibs check` passes while the containers serve the ref you asked for.
+
 ## Checking your results
 
 A lease can expire, a human can take over, or someone can recreate a container behind dibs' back. Tests keep passing in all of these cases, just against the wrong code. So:

@@ -17,6 +17,7 @@ import (
 	"github.com/syednabilashraf/dibs/internal/preflight"
 	"github.com/syednabilashraf/dibs/internal/pressure"
 	"github.com/syednabilashraf/dibs/internal/queue"
+	"github.com/syednabilashraf/dibs/internal/refs"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/swap"
 	"github.com/syednabilashraf/dibs/internal/tree"
@@ -33,12 +34,15 @@ func runTake(e *env, args []string) int {
 	if err != nil {
 		return e.errorf("%v", err)
 	}
-	fs := newFlags(e, "take", "<resource|group>... [--wait] [--timeout DURATION] [--lease 30m] [--no-swap] [--allow-migrations] [--tree DIR]")
+	fs := newFlags(e, "take", "<resource|group>... [--wait] [--timeout DURATION] [--lease 30m] [--no-swap] [--allow-migrations] [--ref REF [--patch FILE]...] [--tree DIR]")
 	wait := fs.Bool("wait", false, "queue until granted, then swap (run it in the background)")
 	timeout := fs.Duration("timeout", a.cfg.WaitTimeout.D(), "give up waiting after this long, losing your place in line (default: wait until granted)")
 	lease := fs.Duration("lease", a.cfg.Lease.D(), "lease length")
 	noSwap := fs.Bool("no-swap", false, "hold the lock without recreating containers")
 	allowMigrations := fs.Bool("allow-migrations", false, "take even if a container's migrations check objects to your worktree")
+	ref := fs.String("ref", "", "serve a dibs-managed checkout of this git ref instead of your worktree (before shots)")
+	var patches multiFlag
+	fs.Var(&patches, "patch", "with --ref: apply this patch file to the checkout (repeatable)")
 	treeFlag := fs.String("tree", "", "worktree to act for (default: current directory)")
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -58,8 +62,18 @@ func runTake(e *env, args []string) int {
 	if err := a.validate(ctx, names); err != nil {
 		return e.errorf("%v", err)
 	}
+	if len(patches) > 0 && *ref == "" {
+		return e.errorf("--patch only applies with --ref")
+	}
+	target, serve := t, ""
+	if *ref != "" {
+		if target, err = a.refCheckout(ctx, t, *ref, patches); err != nil {
+			return e.errorf("%v", err)
+		}
+		serve = target.Path
+	}
 	if !*noSwap && !*allowMigrations {
-		if refusals := a.takePreflight(ctx, t, a.split(names)); len(refusals) > 0 {
+		if refusals := a.takePreflight(ctx, target, a.split(names)); len(refusals) > 0 {
 			a.refuseTake(refusals, positional)
 			return exitNo
 		}
@@ -83,7 +97,7 @@ func runTake(e *env, args []string) int {
 			}
 			result, takeErr = queue.Take(st, queue.Request{
 				Tree: t.Path, Label: t.Label, Resources: names, Lease: *lease,
-				PID: os.Getpid(), NoSwap: *noSwap, Enqueue: *wait,
+				PID: os.Getpid(), NoSwap: *noSwap, Serve: serve, Enqueue: *wait,
 			}, state.ProcessAlive)
 			return nil
 		})
@@ -140,6 +154,9 @@ func runTake(e *env, args []string) int {
 	if a.split(names) != nil && pressure.Current(ctx) == pressure.Critical {
 		e.printf("dibs: note: this machine is out of memory (memory pressure is critical), so containers may take much longer than usual to start\n")
 	}
+	if serve != "" {
+		e.printf("dibs: the containers will serve %s (checkout %s), not your worktree. Run the take again without --ref to switch them back.\n", target.Label, target.Path)
+	}
 
 	containers := a.split(names)
 	if len(containers) == 0 {
@@ -162,14 +179,14 @@ func runTake(e *env, args []string) int {
 			return a.stopTake(t, names, before, fmt.Errorf("stopped before %s was touched", name))
 		}
 		if !*allowMigrations {
-			if refusals := a.takePreflight(ctx, t, []string{name}); len(refusals) > 0 {
+			if refusals := a.takePreflight(ctx, target, []string{name}); len(refusals) > 0 {
 				returned := a.giveBack(t, names, before)
 				a.refuseTake(refusals, positional)
 				e.printf("dibs: the check passed when you queued, but not now that it is your turn; gave back %s\n", strings.Join(returned, ", "))
 				return exitNo
 			}
 		}
-		outcome, err := sw.Serve(ctx, name, t)
+		outcome, err := sw.Serve(ctx, name, target)
 		if outcome != nil {
 			a.report(outcome)
 		}
@@ -203,25 +220,25 @@ func runTake(e *env, args []string) int {
 	return exitOK
 }
 
-func (a *app) takePreflight(ctx context.Context, t *tree.Tree, containers []string) []string {
+func (a *app) takePreflight(ctx context.Context, target *tree.Tree, containers []string) []string {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil
 	}
 	refusals := []string{}
 	for _, name := range containers {
-		if r := st.Lookup(name); r != nil && r.Serving == t.Path && r.Status == state.StatusReady {
+		if r := st.Lookup(name); r != nil && r.Serving == target.Path && r.Status == state.StatusReady {
 			continue
 		}
-		if result, checked := a.checkMigrations(ctx, name, t.Path, preflight.Take); checked && !result.Passed {
-			refusals = append(refusals, fmt.Sprintf("%s: on your worktree %s", name, result.Explain()))
+		if result, checked := a.checkMigrations(ctx, name, target.Path, preflight.Take); checked && !result.Passed {
+			refusals = append(refusals, fmt.Sprintf("%s: on %s %s", name, target.Label, result.Explain()))
 		}
 	}
 	return refusals
 }
 
 func (a *app) refuseTake(refusals []string, positional []string) {
-	a.printf("dibs: not taken. Starting these containers on your worktree would change the shared stores every session uses:\n")
+	a.printf("dibs: not taken. Starting these containers there would change the shared stores every session uses:\n")
 	for _, refusal := range refusals {
 		a.printf("  - %s\n", refusal)
 	}
@@ -254,6 +271,24 @@ func (a *app) resetBrowser(ctx context.Context, whose string) {
 	if err == nil && closed > 0 {
 		a.printf("dibs: browser: closed %d tab(s) %s; it is left with one blank tab\n", closed, whose)
 	}
+}
+
+func (a *app) refCheckout(ctx context.Context, t *tree.Tree, ref string, patches []string) (*tree.Tree, error) {
+	if st, err := a.store.Read(); err == nil {
+		removed := refs.Prune(ctx, a.store.Dir, func(path string) bool {
+			for _, name := range st.Names() {
+				if st.Resources[name].Serving == path {
+					return true
+				}
+			}
+			return false
+		})
+		for _, path := range removed {
+			a.printf("dibs: removed %s; the worktree it was made for is gone\n", path)
+		}
+	}
+	a.printf("dibs: preparing a checkout of %s\n", ref)
+	return refs.Prepare(ctx, a.store.Dir, t, ref, patches)
 }
 
 func (a *app) warnIfBaseline(t *tree.Tree) {
@@ -588,8 +623,12 @@ func runCheck(e *env, args []string) int {
 		if r.Virtual || h.NoSwap {
 			continue
 		}
-		if r.Serving != "" && r.Serving != t.Path {
-			problems = append(problems, fmt.Sprintf("%s: serving %s, not your worktree", name, servingText(r)))
+		if r.Serving != "" && r.Serving != h.Target() {
+			want := "your worktree"
+			if h.Serve != "" {
+				want = "the checkout you asked for"
+			}
+			problems = append(problems, fmt.Sprintf("%s: serving %s, not %s", name, servingText(r), want))
 			continue
 		}
 		if client == nil {
