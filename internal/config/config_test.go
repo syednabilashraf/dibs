@@ -192,3 +192,16 @@ func TestRefreshSettings(t *testing.T) {
 		t.Fatalf("refresh = %+v", cfg.Refresh)
 	}
 }
+
+func TestBrowserToolsAndTabLimit(t *testing.T) {
+	t.Setenv("DIBS_CONFIG", filepath.Join(t.TempDir(), "missing.yaml"))
+	cfg, _ := Load()
+	if !cfg.Browser.Drives("mcp__chrome-devtools__click") || cfg.Browser.Drives("mcp__playwright__click") || cfg.Browser.TabLimit() != 6 {
+		t.Fatalf("defaults: %+v", cfg.Browser)
+	}
+	writeConfig(t, "browser:\n  tools: [mcp__browser__]\n  max_tabs: 0\n")
+	cfg, _ = Load()
+	if !cfg.Browser.Drives("mcp__browser__new_page") || cfg.Browser.Drives("mcp__chrome-devtools__click") || cfg.Browser.TabLimit() != 0 {
+		t.Fatalf("configured: %+v", cfg.Browser)
+	}
+}

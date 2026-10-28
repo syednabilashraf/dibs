@@ -92,6 +92,24 @@ type Browser struct {
 	Profile    string   `yaml:"profile"`
 	Chrome     string   `yaml:"chrome"`
 	MCPCommand []string `yaml:"mcp_command"`
+	Tools      []string `yaml:"tools"`
+	MaxTabs    *int     `yaml:"max_tabs"`
+}
+
+func (b Browser) Drives(tool string) bool {
+	for _, prefix := range b.Tools {
+		if prefix != "" && strings.HasPrefix(tool, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b Browser) TabLimit() int {
+	if b.MaxTabs == nil {
+		return 6
+	}
+	return *b.MaxTabs
 }
 
 type Refresh struct {
@@ -215,6 +233,9 @@ func (c *Config) applyDefaults() {
 	c.Browser.Profile = ExpandHome(c.Browser.Profile)
 	if len(c.Browser.MCPCommand) == 0 {
 		c.Browser.MCPCommand = []string{"npx", "-y", "chrome-devtools-mcp@latest"}
+	}
+	if c.Browser.Tools == nil {
+		c.Browser.Tools = []string{"mcp__chrome-devtools__"}
 	}
 	for i, path := range c.Refresh.Watch {
 		c.Refresh.Watch[i] = ExpandHome(path)
