@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/syednabilashraf/dibs/internal/config"
 	"github.com/syednabilashraf/dibs/internal/state"
 )
 
@@ -102,7 +103,7 @@ func TestPrimerAndRelevance(t *testing.T) {
 	if Relevant(w.cfg, state.New(), w.b) {
 		t.Fatal("nothing managed and no configured repos means stay quiet")
 	}
-	w.cfg.Repos = []string{w.main.Path}
+	w.cfg.Repos = []config.Repo{{Path: w.main.Path}}
 	if !Relevant(w.cfg, state.New(), w.b) {
 		t.Fatal("a configured repo is relevant before anything is managed")
 	}

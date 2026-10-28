@@ -398,7 +398,7 @@ func TestBaselineProtectionCanBeDisabled(t *testing.T) {
 
 func TestConfiguredRepoIsBaselineBeforeAnythingIsManaged(t *testing.T) {
 	w := newWorld(t)
-	w.cfg.Repos = []string{w.main.Path}
+	w.cfg.Repos = []config.Repo{{Path: w.main.Path}}
 	d := Decide(w.cfg, state.New(), w.main, editCall("Edit", filepath.Join(w.main.Path, "web", "x"), w.main.Path), now, alive)
 	if !d.Deny || !strings.Contains(d.Reason, "the shared containers") {
 		t.Fatalf("a configured repo is the baseline even with nothing managed: %v %s", d.Deny, d.Reason)

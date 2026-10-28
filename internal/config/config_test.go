@@ -131,3 +131,52 @@ func TestIdleAndHoldSettings(t *testing.T) {
 		t.Fatalf("configured: idle %s hold %s max %s", cfg.IdleRelease.D(), cfg.Hold.D(), cfg.HoldMax.D())
 	}
 }
+
+func TestReposAcceptPathsOrBaselineSettings(t *testing.T) {
+	writeConfig(t, `
+repos:
+  - ~/code/app
+  - path: ~/code/other
+    baseline:
+      remote: upstream
+      branch: trunk
+      sync: auto
+      after_sync: ['make deps']
+containers:
+  web:
+    migrations:
+      check: 'check-migrations web'
+      paths: [db/migrations]
+`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	if len(cfg.Repos) != 2 || cfg.Repos[0].Path != filepath.Join(home, "code/app") || cfg.Repos[0].Baseline.Sync != SyncManual {
+		t.Fatalf("plain path: %+v", cfg.Repos)
+	}
+	want := Baseline{Remote: "upstream", Branch: "trunk", Sync: SyncAuto, AfterSync: []string{"make deps"}}
+	if cfg.Repos[1].Path != filepath.Join(home, "code/other") || !reflect.DeepEqual(cfg.Repos[1].Baseline, want) {
+		t.Fatalf("settings: %+v", cfg.Repos[1])
+	}
+	if !reflect.DeepEqual(cfg.RepoPaths(), []string{filepath.Join(home, "code/app"), filepath.Join(home, "code/other")}) {
+		t.Fatalf("paths: %v", cfg.RepoPaths())
+	}
+	if m := cfg.ContainerConfig("web").Migrations; m.Check != "check-migrations web" || !reflect.DeepEqual(m.Paths, []string{"db/migrations"}) {
+		t.Fatalf("migrations: %+v", m)
+	}
+}
+
+func TestBaselineSettingsAreValidated(t *testing.T) {
+	for _, body := range []string{
+		"repos: [{baseline: {sync: auto}}]\n",
+		"repos: [{path: /x, baseline: {sync: sometimes}}]\n",
+		"containers: {web: {migrations: {paths: [db]}}}\n",
+	} {
+		writeConfig(t, body)
+		if _, err := Load(); err == nil {
+			t.Fatalf("expected an error for %q", body)
+		}
+	}
+}

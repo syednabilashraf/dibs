@@ -87,7 +87,7 @@ func Relevant(cfg *config.Config, st *state.State, caller *tree.Tree) bool {
 			return true
 		}
 	}
-	for _, repo := range cfg.Repos {
+	for _, repo := range cfg.RepoPaths() {
 		if t, err := tree.Resolve(repo); err == nil && t.Common == caller.Common {
 			return true
 		}

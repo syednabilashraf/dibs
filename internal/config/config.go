@@ -40,8 +40,39 @@ type Ready struct {
 	MaxRestarts int      `yaml:"max_restarts"`
 }
 
+type Migrations struct {
+	Check string   `yaml:"check"`
+	Paths []string `yaml:"paths"`
+}
+
 type Container struct {
-	Ready Ready `yaml:"ready"`
+	Ready      Ready      `yaml:"ready"`
+	Migrations Migrations `yaml:"migrations"`
+}
+
+const (
+	SyncManual = "manual"
+	SyncAuto   = "auto"
+)
+
+type Baseline struct {
+	Remote    string   `yaml:"remote"`
+	Branch    string   `yaml:"branch"`
+	Sync      string   `yaml:"sync"`
+	AfterSync []string `yaml:"after_sync"`
+}
+
+type Repo struct {
+	Path     string   `yaml:"path"`
+	Baseline Baseline `yaml:"baseline"`
+}
+
+func (r *Repo) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		return node.Decode(&r.Path)
+	}
+	type plain Repo
+	return node.Decode((*plain)(r))
 }
 
 type Guard struct {
@@ -73,7 +104,7 @@ type Config struct {
 	Hold          Duration             `yaml:"hold"`
 	HoldMax       Duration             `yaml:"hold_max"`
 	RestoreOnPass bool                 `yaml:"restore_on_pass"`
-	Repos         []string             `yaml:"repos"`
+	Repos         []Repo               `yaml:"repos"`
 	Virtual       []string             `yaml:"virtual"`
 	Groups        map[string][]string  `yaml:"groups"`
 	Containers    map[string]Container `yaml:"containers"`
@@ -169,8 +200,11 @@ func (c *Config) applyDefaults() {
 	if len(c.Browser.MCPCommand) == 0 {
 		c.Browser.MCPCommand = []string{"npx", "-y", "chrome-devtools-mcp@latest"}
 	}
-	for i, repo := range c.Repos {
-		c.Repos[i] = ExpandHome(repo)
+	for i := range c.Repos {
+		c.Repos[i].Path = ExpandHome(c.Repos[i].Path)
+		if c.Repos[i].Baseline.Sync == "" {
+			c.Repos[i].Baseline.Sync = SyncManual
+		}
 	}
 }
 
@@ -181,6 +215,19 @@ func setDuration(d *Duration, fallback time.Duration) {
 }
 
 func (c *Config) validate() error {
+	for _, repo := range c.Repos {
+		if repo.Path == "" {
+			return fmt.Errorf("every entry under repos needs a path")
+		}
+		if repo.Baseline.Sync != SyncManual && repo.Baseline.Sync != SyncAuto {
+			return fmt.Errorf("repo %s: baseline.sync must be %q or %q", repo.Path, SyncManual, SyncAuto)
+		}
+	}
+	for name, container := range c.Containers {
+		if container.Migrations.Check == "" && len(container.Migrations.Paths) > 0 {
+			return fmt.Errorf("containers.%s.migrations lists paths but no check", name)
+		}
+	}
 	for name, members := range c.Groups {
 		if c.IsVirtual(name) {
 			return fmt.Errorf("group %q has the same name as a virtual resource", name)
@@ -226,6 +273,14 @@ func (c *Config) Expand(names []string) []string {
 
 func (c *Config) ContainerConfig(name string) Container {
 	return c.Containers[name]
+}
+
+func (c *Config) RepoPaths() []string {
+	paths := make([]string, 0, len(c.Repos))
+	for _, repo := range c.Repos {
+		paths = append(paths, repo.Path)
+	}
+	return paths
 }
 
 func ExpandHome(path string) string {
