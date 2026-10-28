@@ -69,6 +69,7 @@ func Ensure(ctx context.Context, opts Options) error {
 	if pid := ProfileOwner(opts.Profile); pid != 0 {
 		return fmt.Errorf("the Chrome profile %s is already open in another Chrome (pid %d) without remote debugging on port %d; close that Chrome or point browser.profile at a different directory", opts.Profile, pid, opts.Port)
 	}
+	clearStaleLock(opts.Profile)
 	if err := os.MkdirAll(opts.Profile, 0o755); err != nil {
 		return err
 	}
@@ -203,5 +204,19 @@ func ProfileOwner(profile string) int {
 	if err := syscall.Kill(pid, 0); err != nil && !errors.Is(err, syscall.EPERM) {
 		return 0
 	}
+	if zombie(pid) {
+		return 0
+	}
 	return pid
+}
+
+func zombie(pid int) bool {
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return err == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
+}
+
+func clearStaleLock(profile string) {
+	for _, name := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
+		os.Remove(filepath.Join(profile, name))
+	}
 }

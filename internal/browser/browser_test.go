@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func fakeChrome(t *testing.T) int {
@@ -125,5 +126,38 @@ func TestEnsureLaunchesARealChromeOutsideTheCallersProcessTree(t *testing.T) {
 	}
 	if !Ready(context.Background(), opts.Port) {
 		t.Fatal("the debugging port should answer")
+	}
+}
+
+func TestAZombieChromeDoesNotOwnTheProfile(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	deadline := time.Now().Add(5 * time.Second)
+	for !zombie(cmd.Process.Pid) {
+		if time.Now().After(deadline) {
+			t.Skip("could not observe a zombie process")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	profile := t.TempDir()
+	os.Symlink("host-"+strconv.Itoa(cmd.Process.Pid), filepath.Join(profile, "SingletonLock"))
+	if pid := ProfileOwner(profile); pid != 0 {
+		t.Fatalf("a Chrome that exited but was never reaped must not hold the profile: pid %d", pid)
+	}
+}
+
+func TestEnsureClearsAStaleProfileLock(t *testing.T) {
+	profile := t.TempDir()
+	os.Symlink("host-999999", filepath.Join(profile, "SingletonLock"))
+	os.Symlink("/tmp/gone", filepath.Join(profile, "SingletonSocket"))
+	opts := Options{Port: freePort(t), Profile: profile, Chrome: "/nonexistent/chrome", StateDir: t.TempDir()}
+	Ensure(context.Background(), opts)
+	for _, name := range []string{"SingletonLock", "SingletonSocket"} {
+		if _, err := os.Lstat(filepath.Join(profile, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s from a dead Chrome should be cleared before launching", name)
+		}
 	}
 }
