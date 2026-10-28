@@ -23,7 +23,7 @@ func BaselineRoots(cfg *config.Config, st *state.State) map[string][]string {
 			roots[root] = append(roots[root], name)
 		}
 	}
-	for _, repo := range cfg.Repos {
+	for _, repo := range cfg.RepoPaths() {
 		if t, err := tree.Resolve(repo); err == nil {
 			if _, ok := roots[t.Path]; !ok {
 				roots[t.Path] = nil

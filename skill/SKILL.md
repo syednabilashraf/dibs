@@ -61,6 +61,14 @@ To stop a take you no longer want, in line or already swapping, run `dibs cancel
 
 Databases and other stateful services are not swapped: every worktree uses the same ones. A schema migration you apply is seen by every session and can stop containers built from other checkouts from starting. Ask the user before applying one, and remove test data you add.
 
+## When the baseline is behind
+
+The baseline checkout can fall behind its remote branch while shared databases move on. Then a restored container may refuse to start, or `dibs restore` refuses because the container's migrations check objects.
+
+- `dibs baseline` shows how far behind it is and which containers run it.
+- `dibs baseline sync` fetches and fast-forwards it. It refuses when that is unsafe and says why: local changes in the checkout, a lease on a container running the baseline, or a migrations check.
+- Ask the user before passing `--stash` or `--allow-migrations`; both change what every session runs.
+
 ## When a container fails to start on your worktree
 
 If `dibs take` says a container is still starting, it is running your worktree but has not passed its readiness check within its timeout (a slow build, say). You still hold it. Run `dibs take <container>` again later, which re-checks it without recreating it, and only test once it is ready.
@@ -144,6 +152,8 @@ These are facts about the shared environment. Act on them before interpreting te
 | `dibs line` | The queue. |
 | `dibs tmpdir` | Your worktree's scratch path for copies inside containers. |
 | `dibs restore <container>` | Put a container back on the baseline (unheld, or held by you). |
+| `dibs baseline` | How far the baseline checkout is behind its remote branch. |
+| `dibs baseline sync` | Fast-forward the baseline checkout when it is safe. |
 
 Exit code 2 always means "no", and 1 means something broke.
 

@@ -202,7 +202,7 @@ func writeStackConfig(t *testing.T, body string) {
 func TestCLIFailedStartKeepsTheLeaseAndPassRestores(t *testing.T) {
 	s := newStack(t)
 	s.rerun(t, "grep -q ticket-a /app/who && { echo 'cannot start on ticket-a'; exit 1; }; sleep 3600")
-	writeStackConfig(t, fmt.Sprintf("containers:\n  %s:\n    ready:\n      settle: 500ms\n", s.container))
+	writeStackConfig(t, fmt.Sprintf("containers:\n  %s:\n    ready:\n      settle: 3s\n", s.container))
 
 	code, out := dibs(t, "take", s.container, "--tree", s.a)
 	if code != exitError || !strings.Contains(out, "you still hold") || !strings.Contains(out, "exited during startup") || !strings.Contains(out, "cannot start on ticket-a") {
