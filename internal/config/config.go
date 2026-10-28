@@ -127,6 +127,11 @@ func (r Refresh) Declares(name string) bool {
 	return false
 }
 
+type Test struct {
+	MaxParallel int    `yaml:"max_parallel"`
+	Memory      string `yaml:"memory"`
+}
+
 type Config struct {
 	Lease         Duration             `yaml:"lease"`
 	WaitTimeout   Duration             `yaml:"wait_timeout"`
@@ -144,6 +149,7 @@ type Config struct {
 	Guard         Guard                `yaml:"guard"`
 	Browser       Browser              `yaml:"browser"`
 	Refresh       Refresh              `yaml:"refresh"`
+	Test          Test                 `yaml:"test"`
 }
 
 var DefaultUsePatterns = []string{
@@ -223,6 +229,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Guard.UsePatterns == nil {
 		c.Guard.UsePatterns = DefaultUsePatterns
+	}
+	if c.Test.MaxParallel == 0 {
+		c.Test.MaxParallel = 2
 	}
 	if c.Browser.Port == 0 {
 		c.Browser.Port = 9222

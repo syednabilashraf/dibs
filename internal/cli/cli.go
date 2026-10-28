@@ -54,6 +54,7 @@ func commands() []command {
 		{"line", "show the queue", runLine},
 		{"tmpdir", "print a scratch path unique to this worktree, for copying code into containers", runTmpdir},
 		{"baseline", "show how far the baseline checkout is behind its remote branch (sync to fast-forward it)", runBaseline},
+		{"test", "run a command in a private copy of a container with this worktree mounted (exits with its code)", runTest},
 		{"guard", "Claude Code PreToolUse hook (--post for PostToolUse): guard shared containers and explain swaps", runGuard},
 		{"context", "Claude Code SessionStart and SubagentStart hook: explain the shared containers and who holds what", runContext},
 		{"browser-mcp", "run chrome-devtools-mcp against one shared Chrome, launching it if needed", runBrowserMCP},
