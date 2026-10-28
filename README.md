@@ -43,7 +43,7 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 
 - **Guard (PreToolUse).** Blocks tool calls that would take something from another worktree:
   - restarting, recreating or re-pointing a held container, including through your own wrapper commands (configurable patterns);
-  - driving the browser while the stack serves someone else's code;
+  - driving the browser (or an e2e run) before the containers the session took run its worktree; containers it did not take are left alone, whatever they run. A session that took nothing is asked to take `browser` and what its change touches while the stack runs someone else's code;
   - hitting a container's published port while it serves someone else;
   - switching branches in another worktree;
   - editing files or changing branches in the baseline checkout (the checkout the containers run by default, usually the main clone), including from a session that started there. That session is told to create a worktree instead.

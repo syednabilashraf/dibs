@@ -55,7 +55,7 @@ To stop a take you no longer want, in line or already swapping, run `dibs cancel
 
 - `browser`: whenever you will use browser automation. There is one shared Chrome, and every session sees every tab: act only on tabs you opened, and close them when done.
 - Every container whose code your change touches. `dibs status` lists the containers dibs knows about; any container name works.
-- A container you did not change can stay on the baseline. The browser guard requires every container dibs manages to run either the baseline or your worktree, so a container still running someone else's worktree must be taken (or restored with `dibs restore`) first.
+- A container you did not change can stay as it is. It may still run the code of the last worktree that held it, which is fine as long as your change does not touch it. Only what you take must run your worktree, so take every container your change touches; do not restore containers you did not take just to tidy up.
 
 ## Shared databases
 
@@ -110,7 +110,7 @@ docker exec -w $dir <container> <test command>
 
 A dibs hook blocks commands that would take a container from another worktree:
 - restarting, recreating or re-pointing a held container;
-- driving the browser while the stack serves someone else's code;
+- driving the browser or an e2e run while a container you took has not switched to your worktree yet, or, if you took nothing, while the stack runs someone else's code;
 - switching branches in another worktree.
 
 The message is accurate. Follow it: usually `dibs take <what you need> --wait` in the background, then retry. Do not work around the guard (for example by renaming commands or using another tool to do the same thing).
