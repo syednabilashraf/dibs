@@ -32,26 +32,32 @@ func runStatus(e *env, args []string) int {
 	now := time.Now()
 	recent, _ := a.store.Events(now.Add(-2 * time.Hour))
 	if *asJSON {
-		out := map[string]any{"resources": st.Resources, "queue": st.Queue, "recent": recent, "now": now}
+		lastCalls := map[string]time.Time{}
+		for _, name := range st.Names() {
+			if since, ok := a.lastCall(st.Resources[name].ActiveHolder(now)); ok {
+				lastCalls[st.Resources[name].Holder.Tree] = since
+			}
+		}
+		out := map[string]any{"resources": st.Resources, "queue": st.Queue, "recent": recent, "now": now, "last_tool_call": lastCalls}
 		data, _ := json.MarshalIndent(out, "", "  ")
 		e.printf("%s\n", data)
 		return exitOK
 	}
-	writeStatus(e.stdout, st, recent, now)
+	writeStatus(e.stdout, st, recent, now, a.lastCall)
 	return exitOK
 }
 
-func writeStatus(w io.Writer, st *state.State, recent []state.Event, now time.Time) {
+func writeStatus(w io.Writer, st *state.State, recent []state.Event, now time.Time, lastCall func(*state.Holder) (time.Time, bool)) {
 	if len(st.Resources) == 0 && len(st.Queue) == 0 {
 		fmt.Fprintln(w, "dibs: nothing is held or managed yet")
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "RESOURCE\tHOLDER\tSERVING\tSTATUS\tLEASE")
+	fmt.Fprintln(tw, "RESOURCE\tHOLDER\tSERVING\tSTATUS\tLEASE\tLAST TOOL CALL")
 	for _, name := range st.Names() {
 		r := st.Resources[name]
 		h := r.ActiveHolder(now)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, holderText(h), servingText(r), statusText(r), leaseText(h, now))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, holderText(h), servingText(r), statusText(r), leaseText(h, now), lastCallText(h, now, lastCall))
 	}
 	tw.Flush()
 	if len(st.Queue) > 0 {
@@ -101,9 +107,25 @@ func leaseText(h *state.Holder, now time.Time) string {
 		return "-"
 	case h.Pinned():
 		return "until dropped"
+	case h.OnHold():
+		return "on hold, " + fmtDuration(h.Expires.Sub(now)) + " left"
 	default:
 		return fmtDuration(h.Expires.Sub(now)) + " left"
 	}
+}
+
+func lastCallText(h *state.Holder, now time.Time, lastCall func(*state.Holder) (time.Time, bool)) string {
+	if h == nil || h.Kind != state.KindSession {
+		return "-"
+	}
+	since, ok := lastCall(h)
+	if !ok {
+		return "unknown"
+	}
+	if now.Sub(since) < time.Minute {
+		return "just now"
+	}
+	return fmtDuration(now.Sub(since)) + " ago"
 }
 
 func eventText(ev state.Event) string {
@@ -130,6 +152,10 @@ func eventText(ev state.Event) string {
 		return fmt.Sprintf("%s passed %s", who, ev.Resource)
 	case "expire":
 		return fmt.Sprintf("%s's lease on %s expired", who, ev.Resource)
+	case "idle":
+		return fmt.Sprintf("%s lost %s: %s", who, ev.Resource, ev.Detail)
+	case "hold":
+		return fmt.Sprintf("%s put %s on hold: %s", who, ev.Resource, ev.Detail)
 	case "abandon":
 		return fmt.Sprintf("%s stopped waiting for %s", who, ev.Resource)
 	case "grab":

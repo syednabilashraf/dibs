@@ -170,10 +170,127 @@ func Renew(st *state.State, tree string, lease time.Duration, now time.Time) []s
 		h := st.Resources[name].Holder
 		if h.Kind == state.KindSession {
 			h.Expires = now.Add(lease)
+			h.HoldSince, h.Note = time.Time{}, ""
 			renewed = append(renewed, name)
 		}
 	}
 	return renewed
+}
+
+type Held struct {
+	Resources []string
+	Until     time.Time
+	AtLimit   []string
+}
+
+func Hold(st *state.State, tree, note string, length, limit time.Duration, now time.Time) Held {
+	held := Held{}
+	for _, name := range st.HeldBy(tree, now) {
+		h := st.Resources[name].Holder
+		if h.Kind != state.KindSession {
+			continue
+		}
+		start := h.HoldSince
+		if start.IsZero() {
+			start = now
+		}
+		end := now.Add(length)
+		if limit > 0 && end.After(start.Add(limit)) {
+			end = start.Add(limit)
+		}
+		if !end.After(now) {
+			held.AtLimit = append(held.AtLimit, name)
+			continue
+		}
+		if end.After(h.Expires) {
+			h.Expires = end
+		}
+		h.HoldSince, h.Note = start, note
+		held.Resources = append(held.Resources, name)
+		if h.Expires.After(held.Until) {
+			held.Until = h.Expires
+		}
+	}
+	return held
+}
+
+const trackingSlack = 2 * time.Minute
+
+func IdleSince(h *state.Holder, lastActive time.Time) (time.Time, bool) {
+	if h == nil || lastActive.IsZero() || lastActive.Before(h.Since.Add(-trackingSlack)) {
+		return time.Time{}, false
+	}
+	if lastActive.Before(h.Since) {
+		return h.Since, true
+	}
+	return lastActive, true
+}
+
+type IdlePolicy struct {
+	Limit      time.Duration
+	LastActive func(tree string) time.Time
+	Alive      Alive
+}
+
+type Idle struct {
+	Resource string
+	Holder   state.Holder
+	Since    time.Time
+	Waiters  []state.Waiter
+}
+
+func ReleaseIdle(st *state.State, now time.Time, policy IdlePolicy) []Idle {
+	if policy.Limit <= 0 || policy.LastActive == nil || len(st.Queue) == 0 {
+		return nil
+	}
+	queued := map[string]bool{}
+	for _, w := range st.Queue {
+		queued[w.Tree] = true
+	}
+	activity := map[string]time.Time{}
+	released := []Idle{}
+	for _, name := range st.Names() {
+		r := st.Resources[name]
+		h := r.ActiveHolder(now)
+		if h == nil || h.Kind != state.KindSession || h.OnHold() || queued[h.Tree] {
+			continue
+		}
+		if r.Status == state.StatusSwapping && r.Intent != nil && policy.Alive != nil && policy.Alive(r.Intent.PID) {
+			continue
+		}
+		waiters := WantedBy(st, name, h.Tree)
+		if len(waiters) == 0 {
+			continue
+		}
+		last, ok := activity[h.Tree]
+		if !ok {
+			last = policy.LastActive(h.Tree)
+			activity[h.Tree] = last
+		}
+		since, tracked := IdleSince(h, last)
+		if !tracked || now.Sub(since) < policy.Limit {
+			continue
+		}
+		released = append(released, Idle{Resource: name, Holder: *h, Since: since, Waiters: waiters})
+		r.Holder = nil
+	}
+	return released
+}
+
+func WantedBy(st *state.State, resource, except string) []state.Waiter {
+	waiters := []state.Waiter{}
+	for _, w := range st.Queue {
+		if w.Tree == except {
+			continue
+		}
+		for _, r := range w.Resources {
+			if r == resource {
+				waiters = append(waiters, w)
+				break
+			}
+		}
+	}
+	return waiters
 }
 
 func Grab(st *state.State, holder state.Holder, resources []string, now time.Time) []Displaced {
@@ -270,6 +387,7 @@ func grant(st *state.State, tree, label string, resources []string, lease time.D
 			if h.Kind == state.KindSession {
 				h.Expires = now.Add(lease)
 				h.NoSwap = noSwap
+				h.HoldSince, h.Note = time.Time{}, ""
 			}
 			continue
 		}

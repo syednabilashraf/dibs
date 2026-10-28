@@ -44,6 +44,7 @@ func commands() []command {
 		{"pass", "give back what this worktree holds (--restore to put containers back to baseline)", runPass},
 		{"check", "exit 0 if this worktree still holds its resources and the containers still serve it", runCheck},
 		{"renew", "extend this worktree's leases", runRenew},
+		{"hold", "keep this worktree's leases for a while without tool calls, for example while the user tests (--note says why)", runHold},
 		{"restore", "recreate containers from their baseline (--all for every managed container)", runRestore},
 		{"grab", "pin resources for a human, displacing any session (no expiry)", runGrab},
 		{"drop", "release manual pins", runDrop},
@@ -240,12 +241,15 @@ func holderText(h *state.Holder) string {
 		return "-"
 	}
 	text := fmt.Sprintf("%s (%s)", h.Label, treeName(h.Tree))
-	if h.Pinned() {
+	switch {
+	case h.Pinned():
 		text += " [pinned"
 		if h.Note != "" {
 			text += ": " + h.Note
 		}
 		text += "]"
+	case h.OnHold():
+		text += " [on hold: " + h.Note + "]"
 	}
 	return text
 }

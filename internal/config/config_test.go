@@ -112,3 +112,22 @@ func TestRejectsBadDuration(t *testing.T) {
 		t.Fatal("bad duration should be rejected")
 	}
 }
+
+func TestIdleAndHoldSettings(t *testing.T) {
+	t.Setenv("DIBS_CONFIG", filepath.Join(t.TempDir(), "missing.yaml"))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IdleRelease.D() != 20*time.Minute || cfg.Hold.D() != 30*time.Minute || cfg.HoldMax.D() != 2*time.Hour {
+		t.Fatalf("defaults: idle %s hold %s max %s", cfg.IdleRelease.D(), cfg.Hold.D(), cfg.HoldMax.D())
+	}
+	writeConfig(t, "idle_release: 0s\nhold: 1h\nhold_max: 4h\n")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IdleRelease.D() != 0 || cfg.Hold.D() != time.Hour || cfg.HoldMax.D() != 4*time.Hour {
+		t.Fatalf("configured: idle %s hold %s max %s", cfg.IdleRelease.D(), cfg.Hold.D(), cfg.HoldMax.D())
+	}
+}

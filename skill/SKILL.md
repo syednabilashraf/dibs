@@ -11,7 +11,7 @@ If `dibs` is not on PATH, this skill does not apply.
 
 ## The rule
 
-Hold containers only while testing, never while writing code.
+Hold containers only while testing, never while writing code. Others may be waiting for them.
 
 ```bash
 dibs take browser web api --wait   # run in the background; returns once they run YOUR worktree
@@ -73,6 +73,20 @@ A lease can expire, a human can take over, or someone can recreate a container b
 
 Leases last 30 minutes by default. You will be warned a few minutes before yours ends. Run `dibs renew` if you are still testing.
 
+## Keeping containers for the user
+
+Sometimes the containers have to stay on your worktree while you make no tool calls: the user wants to test your change themselves, or you have stopped to wait for the user (to log in, restart something, answer a question). Then run:
+
+```bash
+dibs hold --for 1h --note "the user is testing the toolbar change"
+```
+
+- It keeps your leases for that long without tool calls, up to a limit the dibs config sets, and everyone waiting sees your note.
+- Tell the user what you are holding and until when, and run `dibs pass` as soon as they are done.
+- Never keep leases alive with a renew loop. While someone waits for what you hold, a worktree that makes no tool calls for a while (20 minutes by default) loses those leases, and renewing does not count as a tool call. Laptop sleep also stalls loops, so they fail silently.
+
+If you are told that sessions are waiting for what you hold, pass what you are not testing with right now.
+
 ## Unit tests need no lease
 
 Tests that run from a copy of your code inside a container do not need that container to serve your worktree. Use a scratch directory unique to your worktree so you never collide with another session:
@@ -103,10 +117,12 @@ If the message says a path is **the baseline** for some containers, do not chang
 
 ## Notes you may receive
 
-After a command, dibs may add a note that:
+After a tool call, dibs may add a note that:
 - a container was recreated while or since you last used it: re-copy and rerun if your command touched it;
 - a container you just used is held by another worktree: its running app shows their code;
-- your lease is about to end.
+- your lease is about to end;
+- other sessions are waiting for what you hold;
+- your worktree no longer holds something it held (the lease expired, it was released while you were idle, or a human pinned it): results from it since then are not from your code.
 
 These are facts about the shared environment. Act on them before interpreting test output.
 
@@ -118,6 +134,7 @@ These are facts about the shared environment. Act on them before interpreting te
 | `dibs check` | Exit 0 if you still hold everything and the containers still serve you. Exit 2 otherwise. |
 | `dibs pass` | Give everything back. The containers keep your code until the next holder takes them. |
 | `dibs renew` | Extend your leases. |
+| `dibs hold --for <time> --note <why>` | Keep your leases without tool calls for a while (the user is testing, or you wait for the user). |
 | `dibs status` | Holders, what each container runs, the queue, recent swaps. |
 | `dibs line` | The queue. |
 | `dibs tmpdir` | Your worktree's scratch path for copies inside containers. |

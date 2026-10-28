@@ -162,12 +162,15 @@ func who(h *state.Holder) string {
 
 func since(h *state.Holder) string {
 	text := "since " + h.Since.Local().Format("15:04")
-	if h.Pinned() {
+	switch {
+	case h.Pinned():
 		text += ", pinned by a human"
 		if h.Note != "" {
 			text += ": " + h.Note
 		}
-	} else if !h.Expires.IsZero() {
+	case h.OnHold():
+		text += ", on hold until " + h.Expires.Local().Format("15:04") + ": " + h.Note
+	case !h.Expires.IsZero():
 		text += ", lease ends " + h.Expires.Local().Format("15:04")
 	}
 	return text

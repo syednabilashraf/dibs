@@ -202,3 +202,127 @@ func TestAheadListsEarlierWaiters(t *testing.T) {
 		t.Fatalf("ahead = %v position = %d", got.Ahead, got.Position)
 	}
 }
+
+func activeAt(times map[string]time.Time) func(string) time.Time {
+	return func(tree string) time.Time { return times[tree] }
+}
+
+func TestIdleHolderLosesWhatOthersWaitFor(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "web", "api")
+	take(t, st, "b", true, "web")
+	policy := IdlePolicy{Limit: 20 * time.Minute, LastActive: activeAt(map[string]time.Time{"a": t0.Add(time.Minute)}), Alive: allAlive}
+
+	if released := ReleaseIdle(st, t0.Add(20*time.Minute), policy); len(released) != 0 {
+		t.Fatalf("19 minutes without tool calls is under the limit: %+v", released)
+	}
+	released := ReleaseIdle(st, t0.Add(22*time.Minute), policy)
+	if len(released) != 1 || released[0].Resource != "web" || !released[0].Since.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("released = %+v", released)
+	}
+	if len(released[0].Waiters) != 1 || released[0].Waiters[0].Tree != "b" {
+		t.Fatalf("the release should name who was waiting: %+v", released[0].Waiters)
+	}
+	if holder(st, "web") != "" || holder(st, "api") != "a" {
+		t.Fatal("only what someone waits for is released")
+	}
+	Schedule(st, t0.Add(22*time.Minute))
+	if holder(st, "web") != "b" {
+		t.Fatal("the waiter should get it at the next schedule")
+	}
+}
+
+func TestIdleReleaseNeedsWaitersAndTracking(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "web")
+	late := t0.Add(3 * time.Hour)
+	tracked := IdlePolicy{Limit: 20 * time.Minute, LastActive: activeAt(map[string]time.Time{"a": t0}), Alive: allAlive}
+	if released := ReleaseIdle(st, late, tracked); len(released) != 0 {
+		t.Fatal("nobody is waiting, so an idle holder keeps its lease")
+	}
+
+	take(t, st, "b", true, "web")
+	untracked := IdlePolicy{Limit: 20 * time.Minute, LastActive: activeAt(nil), Alive: allAlive}
+	if released := ReleaseIdle(st, late, untracked); len(released) != 0 {
+		t.Fatal("a holder whose tool calls dibs never saw (a human at a terminal) is not judged idle")
+	}
+	stale := IdlePolicy{Limit: 20 * time.Minute, LastActive: activeAt(map[string]time.Time{"a": t0.Add(-time.Hour)}), Alive: allAlive}
+	if released := ReleaseIdle(st, late, stale); len(released) != 0 {
+		t.Fatal("activity from before the lease began does not make the holder tracked")
+	}
+	if released := ReleaseIdle(st, late, IdlePolicy{LastActive: tracked.LastActive}); len(released) != 0 {
+		t.Fatal("a zero limit turns idle release off")
+	}
+}
+
+func TestIdleReleaseSparesHoldsSwapsAndWaitingHolders(t *testing.T) {
+	late := t0.Add(time.Hour)
+	policy := IdlePolicy{Limit: 20 * time.Minute, LastActive: activeAt(map[string]time.Time{"a": t0}), Alive: func(pid int) bool { return pid == 7 }}
+
+	held := state.New()
+	take(t, held, "a", false, "web")
+	Hold(held, "a", "the user is testing", 2*time.Hour, 3*time.Hour, t0)
+	take(t, held, "b", true, "web")
+	if released := ReleaseIdle(held, late, policy); len(released) != 0 {
+		t.Fatal("a lease on hold is not idle-released")
+	}
+
+	swapping := state.New()
+	take(t, swapping, "a", false, "web")
+	swapping.Resources["web"].Status = state.StatusSwapping
+	swapping.Resources["web"].Intent = &state.Intent{PID: 7}
+	take(t, swapping, "b", true, "web")
+	if released := ReleaseIdle(swapping, late, policy); len(released) != 0 {
+		t.Fatal("a container still being switched for its holder is not idle")
+	}
+
+	queued := state.New()
+	take(t, queued, "a", false, "web")
+	take(t, queued, "c", false, "api")
+	take(t, queued, "b", true, "web")
+	take(t, queued, "a", true, "api")
+	if released := ReleaseIdle(queued, late, policy); len(released) != 0 {
+		t.Fatal("a holder that is itself queued for more is waiting on dibs, not idle")
+	}
+}
+
+func TestHoldIsBoundedAndShownAsANote(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "web")
+	Grab(st, state.Holder{Tree: "a"}, []string{"api"}, t0)
+
+	held := Hold(st, "a", "waiting for the user to log in", time.Hour, 2*time.Hour, t0)
+	if !reflect.DeepEqual(held.Resources, []string{"web"}) || !held.Until.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("held = %+v", held)
+	}
+	h := st.Lookup("web").Holder
+	if !h.OnHold() || h.Note != "waiting for the user to log in" || !h.Expires.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("holder = %+v", h)
+	}
+
+	if held := Hold(st, "a", "still", 2*time.Hour, 2*time.Hour, t0.Add(50*time.Minute)); !held.Until.Equal(t0.Add(2 * time.Hour)) {
+		t.Fatalf("a hold cannot run past the limit counted from when it began: %+v", held)
+	}
+	if held := Hold(st, "a", "more", time.Hour, 2*time.Hour, t0.Add(2*time.Hour)); len(held.Resources) != 0 || !reflect.DeepEqual(held.AtLimit, []string{"web"}) {
+		t.Fatalf("at the limit the hold is refused: %+v", held)
+	}
+
+	Renew(st, "a", 30*time.Minute, t0.Add(100*time.Minute))
+	if h := st.Lookup("web").Holder; h.OnHold() || h.Note != "" {
+		t.Fatal("renewing returns to an ordinary lease")
+	}
+	Hold(st, "a", "again", time.Hour, 2*time.Hour, t0.Add(110*time.Minute))
+	take(t, st, "a", false, "web")
+	if st.Lookup("web").Holder.OnHold() {
+		t.Fatal("taking again returns to an ordinary lease")
+	}
+}
+
+func TestHoldNeverShortensALease(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "web")
+	Hold(st, "a", "brief", 5*time.Minute, time.Hour, t0)
+	if exp := st.Lookup("web").Holder.Expires; !exp.Equal(t0.Add(30 * time.Minute)) {
+		t.Fatalf("expiry = %v", exp)
+	}
+}

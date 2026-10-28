@@ -21,16 +21,19 @@ const (
 )
 
 type Holder struct {
-	Tree    string    `json:"tree"`
-	Label   string    `json:"label"`
-	Kind    Kind      `json:"kind"`
-	Since   time.Time `json:"since"`
-	Expires time.Time `json:"expires,omitempty"`
-	Note    string    `json:"note,omitempty"`
-	NoSwap  bool      `json:"no_swap,omitempty"`
+	Tree      string    `json:"tree"`
+	Label     string    `json:"label"`
+	Kind      Kind      `json:"kind"`
+	Since     time.Time `json:"since"`
+	Expires   time.Time `json:"expires,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	NoSwap    bool      `json:"no_swap,omitempty"`
+	HoldSince time.Time `json:"hold_since,omitempty"`
 }
 
 func (h *Holder) Pinned() bool { return h != nil && h.Kind == KindManual }
+
+func (h *Holder) OnHold() bool { return h != nil && h.Kind == KindSession && !h.HoldSince.IsZero() }
 
 func (h *Holder) Expired(now time.Time) bool {
 	return h != nil && h.Kind == KindSession && !h.Expires.IsZero() && now.After(h.Expires)

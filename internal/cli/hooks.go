@@ -13,6 +13,7 @@ import (
 
 	"github.com/syednabilashraf/dibs/internal/config"
 	"github.com/syednabilashraf/dibs/internal/guard"
+	"github.com/syednabilashraf/dibs/internal/queue"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/tree"
 )
@@ -81,6 +82,7 @@ func runGuard(e *env, args []string) int {
 		h.post(e.stdout)
 		return exitOK
 	}
+	h.touch(time.Now())
 	decision := guard.Decide(h.cfg, h.st, h.caller, h.in, time.Now(), state.ProcessAlive)
 	if decision.Deny {
 		emitDeny(e.stdout, decision.Reason)
@@ -132,6 +134,30 @@ func (h *hookContext) takeInflight() (time.Time, bool) {
 type sessionMemory struct {
 	LastTouched map[string]time.Time `json:"last_touched"`
 	Told        map[string]bool      `json:"told"`
+	Tree        string               `json:"tree,omitempty"`
+	Held        map[string]time.Time `json:"held,omitempty"`
+	Observed    time.Time            `json:"observed,omitempty"`
+	Reminded    time.Time            `json:"reminded,omitempty"`
+}
+
+const waitingReminder = 10 * time.Minute
+
+func (h *hookContext) touch(now time.Time) {
+	if h.caller == nil {
+		return
+	}
+	self := h.caller.Path
+	relevant := len(h.st.HeldBy(self, now)) > 0 || queue.Position(h.st, self) > 0
+	for _, name := range h.st.Names() {
+		if relevant {
+			break
+		}
+		r := h.st.Resources[name]
+		relevant = r.Repo != "" && r.Repo == h.caller.Common
+	}
+	if relevant {
+		h.store.Touch(self, now)
+	}
 }
 
 func (h *hookContext) sessionPath() string {
@@ -165,11 +191,24 @@ func (h *hookContext) saveSession(mem *sessionMemory) {
 }
 
 func (h *hookContext) post(w io.Writer) {
-	if h.in.ToolName != "Bash" && h.in.ToolName != "Read" {
-		return
-	}
 	now := time.Now()
+	h.touch(now)
 	mem := h.loadSession()
+	notes, dirty := h.swapNotes(mem, now)
+	leaseNotes, leaseDirty := h.leaseNotes(mem, now)
+	notes = append(notes, leaseNotes...)
+	if dirty || leaseDirty || len(notes) > 0 {
+		h.saveSession(mem)
+	}
+	if len(notes) > 0 {
+		emitContext(w, "PostToolUse", strings.Join(notes, "\n\n"))
+	}
+}
+
+func (h *hookContext) swapNotes(mem *sessionMemory, now time.Time) ([]string, bool) {
+	if h.in.ToolName != "Bash" && h.in.ToolName != "Read" {
+		return nil, false
+	}
 	windows := map[string]time.Time{}
 	for name, last := range mem.LastTouched {
 		if now.Sub(last) > 6*time.Hour {
@@ -228,8 +267,38 @@ func (h *hookContext) post(w io.Writer) {
 			notes = append(notes, guard.HeldText(held))
 		}
 	}
+	return notes, len(windows) > 0
+}
 
-	if expiring := guard.ExpiringLeases(h.st, h.self(), now, 5*time.Minute); len(expiring) > 0 {
+func (h *hookContext) leaseNotes(mem *sessionMemory, now time.Time) ([]string, bool) {
+	self := h.self()
+	held := map[string]time.Time{}
+	for _, name := range h.st.HeldBy(self, now) {
+		held[name] = h.st.Resources[name].Holder.Since
+	}
+	notes := []string{}
+	if self != "" && mem.Tree == self {
+		lost := []string{}
+		for name := range mem.Held {
+			if _, ok := held[name]; !ok {
+				lost = append(lost, name)
+			}
+		}
+		if len(lost) > 0 {
+			sort.Strings(lost)
+			events, _ := h.store.Events(mem.Observed.Add(-time.Minute))
+			if lapses := guard.Lapses(h.st, events, lost, self, now); len(lapses) > 0 {
+				notes = append(notes, guard.LapseText(lapses))
+			}
+		}
+	}
+	dirty := mem.Tree != self || !sameHeld(mem.Held, held)
+	mem.Tree, mem.Held = self, held
+	if dirty {
+		mem.Observed = now
+	}
+
+	if expiring := guard.ExpiringLeases(h.st, self, now, 5*time.Minute); len(expiring) > 0 {
 		key := fmt.Sprintf("lease:%d", expiring[0].Expires.Unix())
 		if !mem.Told[key] {
 			mem.Told[key] = true
@@ -237,12 +306,42 @@ func (h *hookContext) post(w io.Writer) {
 		}
 	}
 
-	if len(windows) > 0 || len(notes) > 0 {
-		h.saveSession(mem)
+	if waiting := guard.WaitingOn(h.st, self, now); len(waiting) > 0 {
+		fresh := false
+		for _, w := range waiting {
+			key := "waiting:" + w.Waiter.ID
+			if !mem.Told[key] {
+				mem.Told[key] = true
+				fresh = true
+			}
+		}
+		if fresh || now.Sub(mem.Reminded) >= waitingReminder {
+			mem.Reminded = now
+			notes = append(notes, guard.WaitingText(waiting, h.hold(now), h.cfg.IdleRelease.D(), now))
+		}
 	}
-	if len(notes) > 0 {
-		emitContext(w, "PostToolUse", strings.Join(notes, "\n\n"))
+	return notes, dirty || len(notes) > 0
+}
+
+func (h *hookContext) hold(now time.Time) *state.Holder {
+	for _, name := range h.st.HeldBy(h.self(), now) {
+		if holder := h.st.Resources[name].Holder; holder.OnHold() {
+			return holder
+		}
 	}
+	return nil
+}
+
+func sameHeld(a, b map[string]time.Time) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, since := range a {
+		if other, ok := b[name]; !ok || !other.Equal(since) {
+			return false
+		}
+	}
+	return true
 }
 
 func runContext(e *env, args []string) int {

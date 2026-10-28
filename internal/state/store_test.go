@@ -107,3 +107,26 @@ func TestProcessAlive(t *testing.T) {
 		t.Fatal("non-positive pids are never alive")
 	}
 }
+
+func TestActivityPerTree(t *testing.T) {
+	store, _ := Open(t.TempDir())
+	if !store.LastActive("/w/a").IsZero() {
+		t.Fatal("no activity yet")
+	}
+	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	store.Touch("/w/a", at)
+	if got := store.LastActive("/w/a"); !got.Equal(at) {
+		t.Fatalf("last active = %v", got)
+	}
+	store.Touch("/w/a", at.Add(5*time.Second))
+	if got := store.LastActive("/w/a"); !got.Equal(at) {
+		t.Fatal("touches within the resolution are skipped, to keep hooks cheap")
+	}
+	store.Touch("/w/a", at.Add(time.Minute))
+	if got := store.LastActive("/w/a"); !got.Equal(at.Add(time.Minute)) {
+		t.Fatalf("last active = %v", got)
+	}
+	if !store.LastActive("/w/b").IsZero() {
+		t.Fatal("activity is per tree")
+	}
+}

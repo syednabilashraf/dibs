@@ -23,6 +23,8 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 - **Queue and leases.** Resources are container names plus virtual locks such as `browser`.
   - A `take` gets all of its resources or none, in FIFO order, so it cannot deadlock or starve.
   - Leases expire (30 minutes by default) and can be renewed.
+  - A holder whose session makes no tool calls for 20 minutes while someone waits for what it holds loses those leases. A renew loop running in the background does not count as activity.
+  - To keep containers without tool calls on purpose (the user is testing, or the session is waiting for the user), `dibs hold --note '<why>'` puts the leases on hold for a bounded time and shows the reason to everyone waiting.
   - Waiters that die are dropped from the line.
   - Humans can `grab` a resource, which pins it until they `drop` it.
 - **Lazy handoff.** `dibs pass` does not restart anything. The container keeps the last holder's code until the next take, so each handoff costs one restart and re-taking your own worktree costs none.
@@ -48,7 +50,8 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 
   It prints nothing unless it denies, so your normal permission prompts still apply, and it fails open on its own errors. It is a safety net, not a security boundary.
 - **Primer (SessionStart and SubagentStart).** Sessions in a repository with managed containers start knowing the rules and who holds what. A session that starts in the baseline checkout is told to create a worktree before changing anything, and every session is reminded that databases are shared. The primer is re-injected after compaction. Subagents get it too, with a reminder that they share their parent's leases (leases belong to the worktree) and must not pass what they did not take.
-- **Notes (PostToolUse on Bash and Read).** A session is told when a container it used was recreated while its command ran or since it last touched it ("copy again and rerun"). Background commands are covered too: the note arrives with the session's next command or file read, which is usually it reading the command's output. The session is also told when it touches a container someone else holds, and before its lease runs out.
+- **Notes (PostToolUse).** A session is told when a container it used was recreated while its command ran or since it last touched it ("copy again and rerun"). Background commands are covered too: the note arrives with the session's next command or file read, which is usually it reading the command's output. The session is also told when it touches a container someone else holds, before its lease runs out, who is waiting for what it holds, and, at its next tool call, that a lease ended without it passing (expired, released while idle, or pinned by a human) and who holds it now.
+- **Activity.** The hooks record when each worktree last made a tool call. `dibs status` shows it for every holder, and waiters see when a holder went quiet.
 - **Skill.** `dibs claude-setup` installs a skill with the full protocol.
 - **Shared browser.** `dibs browser-mcp` runs chrome-devtools-mcp against a single Chrome with remote debugging, launching it on first use. Every session gets browser tools and one login, instead of the second session failing on a locked profile.
 
@@ -84,6 +87,9 @@ wait_timeout: 30m     # how long `take --wait` waits
 ready_timeout: 10m    # how long a recreated container may take to become ready
 stop_timeout: 10s     # docker stop grace period
 exec_grace: 5m        # wait this long for running execs before recreating
+idle_release: 20m     # release leases others wait for after this long without tool calls (0: never)
+hold: 30m             # default length of `dibs hold`
+hold_max: 2h          # longest a hold can run before the lease ends
 restore_on_pass: false
 
 repos: [~/code/app]   # main checkouts: primer shown here, treated as the baseline before anything is taken
@@ -126,6 +132,7 @@ browser:
 | `dibs pass [res...] [--restore]` | give back |
 | `dibs check [res...]` | exit 0 if still yours and still serving you |
 | `dibs renew [--lease]` | extend leases |
+| `dibs hold --note TEXT [--for 30m]` | keep leases without tool calls for a while, shown to waiters |
 | `dibs restore <container>... \| --all` | back to the baseline (unheld containers only) |
 | `dibs grab <res>... [--note] [--tree]` / `dibs drop [res...]` | human override |
 | `dibs status [--json]`, `dibs line` | who holds what, the queue, recent swaps |

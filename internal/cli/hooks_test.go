@@ -327,3 +327,132 @@ func TestContextHookPrimesSubagents(t *testing.T) {
 		t.Fatalf("a subagent in the holder's worktree should learn it shares the lease:\n%s", text)
 	}
 }
+
+func queueWaiter(t *testing.T, w hookWorld, tr *tree.Tree, waited time.Duration, resources ...string) {
+	t.Helper()
+	store, _ := state.Open(w.home)
+	store.Update(func(st *state.State) error {
+		st.Queue = append(st.Queue, state.Waiter{ID: "w-" + tr.Label, Tree: tr.Path, Label: tr.Label, Resources: resources, PID: os.Getpid(), Since: time.Now().Add(-waited)})
+		return nil
+	})
+}
+
+func editSession(t *testing.T, w hookWorld, session string, edit func(map[string]any)) {
+	t.Helper()
+	path := filepath.Join(w.home, "sessions", session+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mem map[string]any
+	json.Unmarshal(data, &mem)
+	edit(mem)
+	data, _ = json.Marshal(mem)
+	os.WriteFile(path, data, 0o644)
+}
+
+func TestPostHookTellsAnActiveHolderWhoIsWaiting(t *testing.T) {
+	w := newHookWorld(t)
+	queueWaiter(t, w, w.b, 25*time.Minute, "web", "browser")
+	text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_1", w.a.Path, "ls"))
+	for _, want := range []string{"1 session is waiting", "ticket-b (worktree app-b) for browser, web, waiting 25m", "dibs pass", "dibs hold", "no tool calls for 20m"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q:\n%s", want, text)
+		}
+	}
+	if again := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_2", w.a.Path, "ls")); again != "" {
+		t.Fatalf("the same waiters are not announced on every call:\n%s", again)
+	}
+	editSession(t, w, "s-a", func(mem map[string]any) { mem["reminded"] = time.Now().Add(-11 * time.Minute) })
+	if again := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_3", w.a.Path, "ls")); !strings.Contains(again, "waiting for what this worktree holds") {
+		t.Fatalf("a reminder is due after ten minutes:\n%s", again)
+	}
+	if other := callPost(t, bashHook(t, "PostToolUse", "s-b", "toolu_4", w.b.Path, "ls")); strings.Contains(other, "waiting for what") {
+		t.Fatalf("only the holder is told:\n%s", other)
+	}
+}
+
+func TestPostHookRemindsAHolderOnHold(t *testing.T) {
+	w := newHookWorld(t)
+	store, _ := state.Open(w.home)
+	store.Update(func(st *state.State) error {
+		for _, name := range []string{"browser", "web"} {
+			h := st.Resources[name].Holder
+			h.HoldSince, h.Note, h.Expires = time.Now(), "the user is testing the toolbar", time.Now().Add(time.Hour)
+		}
+		return nil
+	})
+	queueWaiter(t, w, w.b, 5*time.Minute, "web")
+	text := callPost(t, hookInput(t, map[string]any{"hook_event_name": "PostToolUse", "session_id": "s-a", "tool_name": "mcp__chrome-devtools__take_screenshot", "cwd": w.a.Path}))
+	if !strings.Contains(text, "You put it on hold until") || !strings.Contains(text, "the user is testing the toolbar") {
+		t.Fatalf("a holder on hold is reminded of its own hold, after any tool:\n%s", text)
+	}
+}
+
+func TestPostHookExplainsALapsedLease(t *testing.T) {
+	w := newHookWorld(t)
+	if text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_1", w.a.Path, "ls")); text != "" {
+		t.Fatalf("nothing to say yet:\n%s", text)
+	}
+	store, _ := state.Open(w.home)
+	store.Update(func(st *state.State) error {
+		st.Resources["web"].Holder.Expires = time.Now().Add(-time.Minute)
+		st.Resources["browser"].Holder = &state.Holder{Tree: w.b.Path, Label: w.b.Label, Kind: state.KindSession, Since: time.Now(), Expires: time.Now().Add(30 * time.Minute)}
+		return nil
+	})
+	store.Log(state.Event{Kind: "expire", Resource: "browser", Tree: w.a.Path, Label: w.a.Label})
+
+	text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_2", w.a.Path, "ls"))
+	for _, want := range []string{"no longer holds browser, web", "web: your lease on it expired at", "browser: your lease on it expired (noticed at", "ticket-b (worktree app-b) has held it since", "discard them", "dibs take browser web --wait"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q:\n%s", want, text)
+		}
+	}
+	if again := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_3", w.a.Path, "ls")); strings.Contains(again, "no longer holds") {
+		t.Fatalf("a lapse is reported once:\n%s", again)
+	}
+}
+
+func TestPostHookExplainsAnIdleRelease(t *testing.T) {
+	w := newHookWorld(t)
+	callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_1", w.a.Path, "ls"))
+	store, _ := state.Open(w.home)
+	store.Update(func(st *state.State) error {
+		st.Resources["web"].Holder = nil
+		return nil
+	})
+	store.Log(state.Event{Kind: "idle", Resource: "web", Tree: w.a.Path, Label: w.a.Label, Detail: "no tool calls since 04:54 while ticket-b waited"})
+	text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_2", w.a.Path, "ls"))
+	if !strings.Contains(text, "web: dibs released it at") || !strings.Contains(text, "made no tool calls since 04:54 while ticket-b waited") {
+		t.Fatalf("an idle release is explained:\n%s", text)
+	}
+}
+
+func TestPostHookQuietWhenTheWorktreePassedItself(t *testing.T) {
+	w := newHookWorld(t)
+	callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_1", w.a.Path, "ls"))
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"pass", "--tree", w.a.Path}, strings.NewReader(""), &out, &errOut); code != exitOK {
+		t.Fatalf("pass: %d %s %s", code, out.String(), errOut.String())
+	}
+	if text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_2", w.a.Path, "ls")); text != "" {
+		t.Fatalf("passing is not a lapse:\n%s", text)
+	}
+}
+
+func TestGuardRecordsActivityForManagedRepos(t *testing.T) {
+	w := newHookWorld(t)
+	store, _ := state.Open(w.home)
+	callHook(t, "guard", bashHook(t, "PreToolUse", "s-b", "toolu_1", w.b.Path, "ls"))
+	if store.LastActive(w.b.Path).IsZero() {
+		t.Fatal("a tool call in a worktree of a managed repo is activity")
+	}
+	other := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", other).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	callHook(t, "guard", bashHook(t, "PreToolUse", "s-x", "toolu_2", other, "ls"))
+	if entries, _ := os.ReadDir(filepath.Join(w.home, "activity")); len(entries) != 1 {
+		t.Fatalf("repos dibs does not manage leave no trace: %d files", len(entries))
+	}
+}
