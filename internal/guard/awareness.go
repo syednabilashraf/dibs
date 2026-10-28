@@ -201,7 +201,7 @@ func SwapNotes(events []state.Event, touched []string, windows map[string]time.T
 		var last *state.Event
 		for i := range events {
 			ev := events[i]
-			if ev.Resource == name && (ev.Kind == "swap" || ev.Kind == "restore") && ev.Time.After(start) {
+			if ev.Resource == name && (ev.Kind == "swap" || ev.Kind == "restore" || ev.Kind == "refresh") && ev.Time.After(start) {
 				last = &events[i]
 			}
 		}
@@ -209,10 +209,14 @@ func SwapNotes(events []state.Event, touched []string, windows map[string]time.T
 			continue
 		}
 		serving := "the baseline"
-		if last.Kind == "swap" && last.Tree != "" {
+		if last.Kind != "restore" && last.Tree != "" {
 			serving = fmt.Sprintf("%s (worktree %s)", last.Label, filepath.Base(last.Tree))
 		}
-		notes = append(notes, fmt.Sprintf("dibs: %s was recreated at %s by another session and now runs %s. Any command that was running inside it was killed, and anything you copied into it (for example under /tmp) is gone. If that affected what you just ran, copy your code again and rerun; do not treat the failure as a bug in your change.", name, last.Time.Local().Format("15:04:05"), serving))
+		verb := "recreated"
+		if last.Kind == "refresh" {
+			verb = "restarted (dibs refresh, to pick up fresh credentials)"
+		}
+		notes = append(notes, fmt.Sprintf("dibs: %s was %s at %s by another session and now runs %s. Any command that was running inside it was killed, and anything you copied into it (for example under /tmp) is gone. If that affected what you just ran, copy your code again and rerun; do not treat the failure as a bug in your change.", name, verb, last.Time.Local().Format("15:04:05"), serving))
 	}
 	return notes
 }

@@ -94,6 +94,21 @@ type Browser struct {
 	MCPCommand []string `yaml:"mcp_command"`
 }
 
+type Refresh struct {
+	Containers []string `yaml:"containers"`
+	Watch      []string `yaml:"watch"`
+	Check      string   `yaml:"check"`
+}
+
+func (r Refresh) Declares(name string) bool {
+	for _, declared := range r.Containers {
+		if declared == name {
+			return true
+		}
+	}
+	return false
+}
+
 type Config struct {
 	Lease         Duration             `yaml:"lease"`
 	WaitTimeout   Duration             `yaml:"wait_timeout"`
@@ -110,6 +125,7 @@ type Config struct {
 	Containers    map[string]Container `yaml:"containers"`
 	Guard         Guard                `yaml:"guard"`
 	Browser       Browser              `yaml:"browser"`
+	Refresh       Refresh              `yaml:"refresh"`
 }
 
 var DefaultUsePatterns = []string{
@@ -199,6 +215,9 @@ func (c *Config) applyDefaults() {
 	c.Browser.Profile = ExpandHome(c.Browser.Profile)
 	if len(c.Browser.MCPCommand) == 0 {
 		c.Browser.MCPCommand = []string{"npx", "-y", "chrome-devtools-mcp@latest"}
+	}
+	for i, path := range c.Refresh.Watch {
+		c.Refresh.Watch[i] = ExpandHome(path)
 	}
 	for i := range c.Repos {
 		c.Repos[i].Path = ExpandHome(c.Repos[i].Path)

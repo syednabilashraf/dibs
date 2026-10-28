@@ -171,6 +171,11 @@ func (c *Client) Stop(ctx context.Context, id string, timeout time.Duration) err
 	return c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/stop", query, nil, nil)
 }
 
+func (c *Client) Restart(ctx context.Context, id string, timeout time.Duration) error {
+	query := url.Values{"t": {strconv.Itoa(int(timeout.Seconds()))}}
+	return c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/restart", query, nil, nil)
+}
+
 func (c *Client) Remove(ctx context.Context, id string) error {
 	query := url.Values{"v": {"0"}, "force": {"1"}}
 	return c.do(ctx, http.MethodDelete, "/containers/"+url.PathEscape(id), query, nil, nil)
