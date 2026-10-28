@@ -22,7 +22,7 @@ dibs pass                          # as soon as you finish testing
 
 Groups from the dibs config expand to several resources (the session primer lists them), so `dibs take ui --wait` may cover the browser and every container a UI test needs.
 
-Take everything you need in **one** `take`. It is all-or-nothing, so it cannot deadlock. Taking more while holding something is refused if it could deadlock.
+Take everything you need in **one** `take`; it is all-or-nothing. If you later need one more container, take it: if others are waiting for what you hold, you go ahead of them for it. A take that would deadlock is refused.
 
 Leases belong to the **worktree**, not to a session. A subagent working in the same worktree shares its parent's leases: it should use what the parent already holds, and never `dibs pass` something it did not take itself.
 
@@ -42,7 +42,7 @@ If `dibs take` says your worktree is the baseline checkout, you are in the wrong
 
 ## Waiting
 
-`dibs take ... --wait` blocks until every resource is yours **and** each container has been recreated on your worktree and is ready. Other sessions may be ahead of you, so run it as a **background** command and let its completion wake you. Do not poll it and do not start testing before it returns. Its output tells you:
+`dibs take ... --wait` blocks until every resource is yours **and** each container has been recreated on your worktree and is ready. Other sessions may be ahead of you, so run it as a **background** command and let its completion wake you. Do not poll it and do not start testing before it returns. It waits as long as it takes; do not pass `--timeout` unless you must give up by a deadline, because a take that times out loses its place in line. Its output tells you:
 - who you waited for;
 - what each container was serving before;
 - mounts that were kept from the baseline because your worktree lacks them.

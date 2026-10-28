@@ -326,3 +326,50 @@ func TestHoldNeverShortensALease(t *testing.T) {
 		t.Fatalf("expiry = %v", exp)
 	}
 }
+
+func TestAHolderMayTakeWhatAWaiterOnItAlsoWants(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "web")
+	take(t, st, "b", true, "web", "api")
+	if got := take(t, st, "a", true, "api"); got.Outcome != Granted {
+		t.Fatalf("b cannot move until a passes web, so a must not wait behind b for api: %+v", got)
+	}
+	Pass(st, "a", nil, t0)
+	if holder(st, "web") != "b" || holder(st, "api") != "b" {
+		t.Fatal("once a passes, b gets everything it asked for")
+	}
+}
+
+func TestAWaitThroughOtherWorktreesIsFollowed(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "x")
+	take(t, st, "b", false, "y")
+	take(t, st, "c", true, "y", "q")
+	take(t, st, "b", true, "x")
+	if got := take(t, st, "a", true, "q"); got.Outcome != Granted {
+		t.Fatalf("c waits on b, which waits on a, so c's claim on q must not hold a up: %+v", got)
+	}
+}
+
+func TestAOneShotTakeMayJumpWaitersThatWaitOnIt(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "web")
+	take(t, st, "b", true, "web", "api")
+	if got := take(t, st, "a", false, "api"); got.Outcome != Granted {
+		t.Fatalf("outcome = %s", got.Outcome)
+	}
+	if got := take(t, st, "c", false, "api"); got.Outcome == Granted {
+		t.Fatal("c holds nothing anyone waits for, so it still may not cut in")
+	}
+}
+
+func TestAheadLeavesOutWaitersThatWaitOnYou(t *testing.T) {
+	st := state.New()
+	take(t, st, "a", false, "web")
+	take(t, st, "d", false, "db")
+	take(t, st, "b", true, "web", "api")
+	got := take(t, st, "a", true, "api", "db")
+	if got.Outcome != Queued || len(got.Ahead) != 0 || len(got.Blockers) != 1 || got.Blockers[0].Holder.Tree != "d" {
+		t.Fatalf("a waits for d only; b waits for a: %+v", got)
+	}
+}

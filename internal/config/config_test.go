@@ -23,7 +23,7 @@ func TestDefaultsWithoutFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Lease.D() != 30*time.Minute || cfg.StopTimeout.D() != 10*time.Second || cfg.ExecGrace.D() != 5*time.Minute {
+	if cfg.Lease.D() != 30*time.Minute || cfg.StopTimeout.D() != 10*time.Second || cfg.ExecGrace.D() != 5*time.Minute || cfg.WaitTimeout.D() != 0 {
 		t.Fatalf("unexpected duration defaults: %+v", cfg)
 	}
 	if !cfg.IsVirtual("browser") {

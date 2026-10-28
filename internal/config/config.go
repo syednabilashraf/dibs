@@ -129,7 +129,6 @@ func Default() *Config {
 
 func (c *Config) applyDefaults() {
 	setDuration(&c.Lease, 30*time.Minute)
-	setDuration(&c.WaitTimeout, 30*time.Minute)
 	setDuration(&c.ReadyTimeout, 10*time.Minute)
 	setDuration(&c.StopTimeout, 10*time.Second)
 	if c.ExecGrace == nil {

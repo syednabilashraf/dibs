@@ -85,10 +85,12 @@ flowchart LR
 - **Resource:** a container name, or a virtual lock listed in config (default: `browser`). Groups in config expand to several resources. An unknown name is an error, which catches typos.
 - **Holder identity:** the git worktree root of the caller. An agent session has no stable identity visible to the commands it runs, but it works in exactly one worktree, so the worktree is both stable and meaningful. Two sessions in one worktree count as one holder.
 - **Take:** one global FIFO queue.
-  - A waiter is granted when every resource it asked for is free (or already its own) and none of them is wanted by someone earlier in line.
+  - A waiter is granted when every resource it asked for is free (or already its own) and none of them is wanted by someone earlier in line, except an earlier waiter that is itself waiting, directly or through others, on this waiter. Such a waiter cannot move until this one is done, so letting this one go first breaks the cycle instead of freezing both.
+  - The wait-for graph has an edge from a waiter to the holder of anything it wants, and to every earlier waiter that wants something it wants.
   - Grants are all-or-nothing, so there are no partial holds and no starvation.
-  - A one-shot take never jumps the queue.
-  - A waiter that already holds resources is refused if waiting would close a cycle in the wait-for graph.
+  - A one-shot take never jumps the queue, under the same exception.
+  - A waiter that already holds resources is refused if waiting would close a cycle made only of holders, which no ordering can break.
+  - `take --wait` waits until granted unless given `--timeout`.
 - **Leases:** 30 minutes by default, extended by `renew`. An expired lease frees the resource at the next state change. A waiter is tied to the PID of its `take --wait` process and is dropped when that process dies.
 - **Manual pins:** `grab` gives a human a pin that never expires and freezes the queue on those resources until `drop`.
 - **Pass is lazy.** Releasing does not touch the container. It keeps serving the last holder until the next holder takes it, so a handoff costs one recreate and re-taking your own worktree costs none.

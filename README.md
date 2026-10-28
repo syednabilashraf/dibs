@@ -21,7 +21,8 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 - **Swap by recreate.** `dibs take web` reads `web`'s configuration from the Docker Engine API and recreates it under the same name. Every bind mount that points into your repository points at your worktree instead. Networks, aliases, ports, environment, labels and volumes are kept, and anonymous volumes such as `node_modules` are re-attached, not recreated. There is never a second copy of a container.
 - **Baseline.** The first time dibs touches a container it saves its configuration as the baseline, which `dibs restore` returns to. If something else recreates the container later (your usual `up`/`rebuild` tooling), dibs adopts that as the new baseline.
 - **Queue and leases.** Resources are container names plus virtual locks such as `browser`.
-  - A `take` gets all of its resources or none, in FIFO order, so it cannot deadlock or starve.
+  - A `take` gets all of its resources or none, in FIFO order, so it cannot starve. A worktree may take more while it holds something; if earlier waiters are waiting for what it holds, it goes ahead of them for the rest, since they cannot move until it is done. A take that would deadlock is refused.
+  - `take --wait` waits until it is granted unless given `--timeout`; a take that times out loses its place in line, and dibs warns up front when the queue makes that likely.
   - Leases expire (30 minutes by default) and can be renewed.
   - A holder whose session makes no tool calls for 20 minutes while someone waits for what it holds loses those leases. A renew loop running in the background does not count as activity.
   - To keep containers without tool calls on purpose (the user is testing, or the session is waiting for the user), `dibs hold --note '<why>'` puts the leases on hold for a bounded time and shows the reason to everyone waiting.
@@ -83,7 +84,7 @@ Requires Go 1.24+, macOS or Linux, and a Docker daemon on a unix socket (or plai
 
 ```yaml
 lease: 30m            # default lease length
-wait_timeout: 30m     # how long `take --wait` waits
+wait_timeout: 0       # how long `take --wait` waits before giving up; 0: until granted
 ready_timeout: 10m    # how long a recreated container may take to become ready
 stop_timeout: 10s     # docker stop grace period
 exec_grace: 5m        # wait this long for running execs before recreating
