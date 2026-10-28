@@ -61,6 +61,12 @@ To stop a take you no longer want, in line or already swapping, run `dibs cancel
 
 Databases and other stateful services are not swapped: every worktree uses the same ones. A schema migration you apply is seen by every session and can stop containers built from other checkouts from starting. Ask the user before applying one, and remove test data you add.
 
+If the repository declares migrations checks, `dibs take` runs them before recreating a container on your worktree and refuses when your branch would migrate a shared store (the output lists what would run). Ask the user before running it again with `--allow-migrations`.
+
+## Stale credentials
+
+Some containers read host credentials when they start and keep the old ones after the user renews them on the host (errors such as `invalid_grant`, or calls that hang). If the dibs config declares them, run `dibs refresh`: it restarts the declared containers that started before the credentials changed, skips any held by other worktrees, and runs migrations checks first. Do not restart shared containers any other way.
+
 ## When the baseline is behind
 
 The baseline checkout can fall behind its remote branch while shared databases move on. Then a restored container may refuse to start, or `dibs restore` refuses because the container's migrations check objects.
@@ -152,6 +158,7 @@ These are facts about the shared environment. Act on them before interpreting te
 | `dibs line` | The queue. |
 | `dibs tmpdir` | Your worktree's scratch path for copies inside containers. |
 | `dibs restore <container>` | Put a container back on the baseline (unheld, or held by you). |
+| `dibs refresh` | Restart declared containers that started before host credentials changed. |
 | `dibs baseline` | How far the baseline checkout is behind its remote branch. |
 | `dibs baseline sync` | Fast-forward the baseline checkout when it is safe. |
 

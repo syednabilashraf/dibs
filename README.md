@@ -38,7 +38,8 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 - **Stopping a take.** `dibs cancel` stops the worktree's take wherever it is. In line, it leaves the line. Mid-swap, the take finishes the recreate it is in (a container is never left half-recreated), stops waiting for readiness, and gives back everything it acquired; containers already switched keep running the worktree like after a pass. Killing a background take does the same as far as it can in the second or so the shell allows, so `dibs cancel` is the safe way. `dibs restore` holds the container while it works, so no take can recreate it at the same time.
 - **Dropped changes.** The first time dibs recreates a container it did not create, it lists files changed inside it outside volumes (packages installed at runtime, say) and warns that the recreate drops them, since the baseline snapshot cannot capture them.
 - **Baseline sync.** The baseline checkout drifts behind its remote branch while shared databases move on, until baseline containers stop starting. `dibs baseline` shows how far behind it is, and `dibs baseline sync` fetches and fast-forwards it. It refuses when the checkout has local changes or commits of its own, when any container running the baseline is leased or being recreated, or when a migrations check objects to the new revision. With `sync: auto`, a restore tries a sync first.
-- **Migration checks.** A container can declare a command that says whether recreating it on a given checkout is safe for the shared stores, for example because its startup would apply migrations. dibs runs it before restoring a container and before a baseline sync, and refuses without `--allow-migrations`. dibs knows nothing about any migration tool; the command does.
+- **Migration checks.** A container can declare a command that says whether starting it on a given checkout is safe for the shared stores, for example because its startup would apply migrations. dibs runs it before a take recreates the container on a worktree (when queueing, and again when its turn comes), before restoring it, before restarting it with `dibs refresh`, and before a baseline sync, and refuses without `--allow-migrations`. dibs knows nothing about any migration tool; the command does.
+- **Refresh.** Some containers read host state once at startup, such as credentials, and keep the old copy after the host renews it. `dibs refresh` restarts the containers the config declares under `refresh.containers` (only those started before the newest `refresh.watch` file changed, unless `--all`), after an optional `refresh.check` on the host. It waits for running execs, skips containers held by other worktrees, runs their migrations checks first, and tells sessions that used them, so agents can fix stale credentials without a human restarting shared containers.
 - **Checking.** `dibs check` confirms you still hold everything and that each live container is still the one dibs created for your worktree. It catches expired leases, human takeovers and containers recreated behind dibs' back.
 
 ### Claude Code integration
@@ -135,6 +136,11 @@ guard:
   ports: true                        # deny requests to ports of containers serving others
   protect_baseline: true             # deny edits and branch changes in the baseline checkout
 
+refresh:                             # containers `dibs refresh` may restart
+  containers: [api, worker]
+  watch: [~/.config/cloud/credentials.json]   # restart only containers started before these changed
+  check: 'cloud-cli auth print-token >/dev/null'   # must pass on the host first
+
 browser:
   port: 9222
   profile: ~/.cache/dibs/chrome-profile   # any dedicated profile; keep it logged in
@@ -149,7 +155,7 @@ browser:
 - `DIBS_TREE`: that checkout. For a baseline sync it is a temporary directory holding only `paths` at the new revision.
 - `DIBS_REV`: the commit, when known.
 - `DIBS_CONTAINER`: the container name.
-- `DIBS_ACTION`: `restore` or `sync`.
+- `DIBS_ACTION`: `take`, `restore`, `refresh` or `sync`.
 
 Exit 0 means starting the container on that checkout is safe. Anything else means it is not, and whatever the command printed is shown. A typical check compares the migrations in `DIBS_TREE` with the versions recorded in the shared database and prints the ones that would run, or the recorded versions the checkout does not know (the container would refuse to start). A check gets 2 minutes.
 
@@ -157,13 +163,14 @@ Exit 0 means starting the container on that checkout is safe. Anything else mean
 
 | Command | |
 | --- | --- |
-| `dibs take <res\|group>... [--wait] [--timeout] [--lease] [--no-swap] [--tree DIR]` | take and swap |
+| `dibs take <res\|group>... [--wait] [--timeout] [--lease] [--no-swap] [--allow-migrations] [--tree DIR]` | take and swap |
 | `dibs pass [res...] [--restore]` | give back |
 | `dibs cancel` | stop this worktree's take, in line or mid-swap, and give back what it got |
 | `dibs check [res...]` | exit 0 if still yours and still serving you |
 | `dibs renew [--lease]` | extend leases |
 | `dibs hold --note TEXT [--for 30m]` | keep leases without tool calls for a while, shown to waiters |
 | `dibs restore <container>... \| --all [--allow-migrations]` | back to the baseline (unheld containers only) |
+| `dibs refresh [container...] [--all] [--allow-migrations]` | restart the containers declared under `refresh` |
 | `dibs baseline [--fetch]` | how far the baseline checkout is behind, and what runs it |
 | `dibs baseline sync [--stash] [--allow-migrations] [--no-fetch]` | fetch and fast-forward the baseline when it is safe |
 | `dibs grab <res>... [--note] [--tree]` / `dibs drop [res...]` | human override |
