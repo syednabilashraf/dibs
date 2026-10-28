@@ -12,6 +12,7 @@ import (
 
 	"github.com/syednabilashraf/dibs/internal/docker"
 	"github.com/syednabilashraf/dibs/internal/guard"
+	"github.com/syednabilashraf/dibs/internal/preflight"
 	"github.com/syednabilashraf/dibs/internal/queue"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/swap"
@@ -29,11 +30,12 @@ func runTake(e *env, args []string) int {
 	if err != nil {
 		return e.errorf("%v", err)
 	}
-	fs := newFlags(e, "take", "<resource|group>... [--wait] [--timeout DURATION] [--lease 30m] [--no-swap] [--tree DIR]")
+	fs := newFlags(e, "take", "<resource|group>... [--wait] [--timeout DURATION] [--lease 30m] [--no-swap] [--allow-migrations] [--tree DIR]")
 	wait := fs.Bool("wait", false, "queue until granted, then swap (run it in the background)")
 	timeout := fs.Duration("timeout", a.cfg.WaitTimeout.D(), "give up waiting after this long, losing your place in line (default: wait until granted)")
 	lease := fs.Duration("lease", a.cfg.Lease.D(), "lease length")
 	noSwap := fs.Bool("no-swap", false, "hold the lock without recreating containers")
+	allowMigrations := fs.Bool("allow-migrations", false, "take even if a container's migrations check objects to your worktree")
 	treeFlag := fs.String("tree", "", "worktree to act for (default: current directory)")
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -52,6 +54,12 @@ func runTake(e *env, args []string) int {
 	defer cancel()
 	if err := a.validate(ctx, names); err != nil {
 		return e.errorf("%v", err)
+	}
+	if !*noSwap && !*allowMigrations {
+		if refusals := a.takePreflight(ctx, t, a.split(names)); len(refusals) > 0 {
+			a.refuseTake(refusals, positional)
+			return exitNo
+		}
 	}
 
 	before := a.heldNow(t)
@@ -143,6 +151,14 @@ func runTake(e *env, args []string) int {
 		if ctx.Err() != nil {
 			return a.stopTake(t, names, before, fmt.Errorf("stopped before %s was touched", name))
 		}
+		if !*allowMigrations {
+			if refusals := a.takePreflight(ctx, t, []string{name}); len(refusals) > 0 {
+				returned := a.giveBack(t, names, before)
+				a.refuseTake(refusals, positional)
+				e.printf("dibs: the check passed when you queued, but not now that it is your turn; gave back %s\n", strings.Join(returned, ", "))
+				return exitNo
+			}
+		}
 		outcome, err := sw.Serve(ctx, name, t)
 		if outcome != nil {
 			a.report(outcome)
@@ -175,6 +191,31 @@ func runTake(e *env, args []string) int {
 	a.warnIfBaseline(t)
 	e.printf("dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done testing.\n")
 	return exitOK
+}
+
+func (a *app) takePreflight(ctx context.Context, t *tree.Tree, containers []string) []string {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil
+	}
+	refusals := []string{}
+	for _, name := range containers {
+		if r := st.Lookup(name); r != nil && r.Serving == t.Path && r.Status == state.StatusReady {
+			continue
+		}
+		if result, checked := a.checkMigrations(ctx, name, t.Path, preflight.Take); checked && !result.Passed {
+			refusals = append(refusals, fmt.Sprintf("%s: on your worktree %s", name, result.Explain()))
+		}
+	}
+	return refusals
+}
+
+func (a *app) refuseTake(refusals []string, positional []string) {
+	a.printf("dibs: not taken. Starting these containers on your worktree would change the shared stores every session uses:\n")
+	for _, refusal := range refusals {
+		a.printf("  - %s\n", refusal)
+	}
+	a.printf("dibs: ask the user before applying migrations to a shared store. To take anyway, run `dibs take %s --allow-migrations`.\n", strings.Join(positional, " "))
 }
 
 func (a *app) warnIfBaseline(t *tree.Tree) {
@@ -702,7 +743,7 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string, al
 				continue
 			}
 		}
-		holder, ok := a.holdForRestore(name, caller)
+		holder, ok := a.holdBriefly(name, caller, "restore")
 		if !ok {
 			a.printf("dibs: %s: skipped, someone in line is about to take it\n", name)
 			code = exitNo
@@ -712,12 +753,7 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string, al
 		if outcome != nil {
 			a.report(outcome)
 		}
-		if holder != "" {
-			a.store.Update(func(st *state.State) error {
-				queue.Pass(st, holder, []string{name}, time.Now())
-				return nil
-			})
-		}
+		a.letGo(holder, name)
 		if err != nil {
 			a.errorf("%v", err)
 			code = exitError
@@ -727,8 +763,18 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string, al
 	return code
 }
 
-func (a *app) holdForRestore(name string, caller *tree.Tree) (string, bool) {
-	holder, label := "dibs-restore", "dibs restore"
+func (a *app) letGo(holder, name string) {
+	if holder == "" {
+		return
+	}
+	a.store.Update(func(st *state.State) error {
+		queue.Pass(st, holder, []string{name}, time.Now())
+		return nil
+	})
+}
+
+func (a *app) holdBriefly(name string, caller *tree.Tree, purpose string) (string, bool) {
+	holder, label := "dibs-"+purpose, "dibs "+purpose
 	if caller != nil {
 		holder, label = caller.Path, caller.Label
 	}

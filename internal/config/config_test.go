@@ -180,3 +180,15 @@ func TestBaselineSettingsAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshSettings(t *testing.T) {
+	writeConfig(t, "refresh:\n  containers: [api, worker]\n  watch: [~/.config/creds.json]\n  check: 'true'\n")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	if !cfg.Refresh.Declares("worker") || cfg.Refresh.Declares("web") || cfg.Refresh.Watch[0] != filepath.Join(home, ".config/creds.json") || cfg.Refresh.Check != "true" {
+		t.Fatalf("refresh = %+v", cfg.Refresh)
+	}
+}

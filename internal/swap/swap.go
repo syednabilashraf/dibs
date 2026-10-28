@@ -240,6 +240,34 @@ func (s *Swapper) settle(ctx context.Context, name, id string, outcome *Outcome)
 	return fmt.Errorf("%s: %w", name, err)
 }
 
+func (s *Swapper) Restart(ctx context.Context, name string) (*Outcome, error) {
+	raw, err := s.Docker.Inspect(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	summary := docker.Summarize(raw)
+	outcome := &Outcome{Name: name, Serving: summary.Label(LabelTree), ServingLabel: summary.Label(LabelBranch)}
+	if err := s.Store.Update(func(st *state.State) error {
+		r := st.Get(name)
+		r.Status = state.StatusSwapping
+		r.Intent = &state.Intent{Target: outcome.Serving, PID: os.Getpid(), Started: time.Now()}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if summary.Running {
+		outcome.Waited, outcome.Interrupted = s.waitExecs(ctx, name, summary.ID)
+	}
+	restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.Config.StopTimeout.D()+2*time.Minute)
+	defer cancel()
+	if err := s.Docker.Restart(restartCtx, summary.ID, s.Config.StopTimeout.D()); err != nil {
+		s.setStatus(name, state.StatusFailed)
+		return outcome, fmt.Errorf("%s: restart: %w", name, err)
+	}
+	s.Store.Log(state.Event{Kind: "refresh", Resource: name, Tree: outcome.Serving, Label: outcome.ServingLabel, Actor: s.Actor})
+	return outcome, s.settle(ctx, name, summary.ID, outcome)
+}
+
 func (s *Swapper) dropped(parent context.Context, id string, live map[string]any) Dropped {
 	sizeCtx, cancelSize := context.WithTimeout(parent, 20*time.Second)
 	defer cancelSize()

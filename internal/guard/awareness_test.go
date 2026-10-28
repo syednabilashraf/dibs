@@ -140,3 +140,12 @@ func TestPrimerAndRelevance(t *testing.T) {
 		t.Errorf("snapshot for the holder:\n%s", text)
 	}
 }
+
+func TestSwapNotesExplainARefresh(t *testing.T) {
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	events := []state.Event{{Time: start.Add(time.Minute), Kind: "refresh", Resource: "web", Tree: "/w/app-a", Label: "ticket-a", Actor: "/w/app-b"}}
+	notes := SwapNotes(events, []string{"web"}, map[string]time.Time{"web": start}, "/w/app-c")
+	if len(notes) != 1 || !strings.Contains(notes[0], "web was restarted (dibs refresh") || !strings.Contains(notes[0], "ticket-a (worktree app-a)") {
+		t.Fatalf("notes = %v", notes)
+	}
+}

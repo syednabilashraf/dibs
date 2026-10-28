@@ -47,6 +47,7 @@ func commands() []command {
 		{"renew", "extend this worktree's leases", runRenew},
 		{"hold", "keep this worktree's leases for a while without tool calls, for example while the user tests (--note says why)", runHold},
 		{"restore", "recreate containers from their baseline (--all for every managed container)", runRestore},
+		{"refresh", "restart the containers the config declares under refresh, for example after host credentials changed", runRefresh},
 		{"grab", "pin resources for a human, displacing any session (no expiry)", runGrab},
 		{"drop", "release manual pins", runDrop},
 		{"status", "show holders, what each container serves, the queue and recent swaps", runStatus},
