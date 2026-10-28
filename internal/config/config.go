@@ -66,6 +66,9 @@ type Config struct {
 	ReadyTimeout  Duration             `yaml:"ready_timeout"`
 	StopTimeout   Duration             `yaml:"stop_timeout"`
 	ExecGrace     *Duration            `yaml:"exec_grace"`
+	IdleRelease   *Duration            `yaml:"idle_release"`
+	Hold          Duration             `yaml:"hold"`
+	HoldMax       Duration             `yaml:"hold_max"`
 	RestoreOnPass bool                 `yaml:"restore_on_pass"`
 	Repos         []string             `yaml:"repos"`
 	Virtual       []string             `yaml:"virtual"`
@@ -133,6 +136,12 @@ func (c *Config) applyDefaults() {
 		grace := Duration(5 * time.Minute)
 		c.ExecGrace = &grace
 	}
+	if c.IdleRelease == nil {
+		idle := Duration(20 * time.Minute)
+		c.IdleRelease = &idle
+	}
+	setDuration(&c.Hold, 30*time.Minute)
+	setDuration(&c.HoldMax, 2*time.Hour)
 	if c.Virtual == nil {
 		c.Virtual = []string{BrowserResource}
 	}
