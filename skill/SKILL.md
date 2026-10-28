@@ -115,7 +115,7 @@ dibs test <container> -- <test command>
 
 - Nothing another session does can kill it, and it cannot affect the shared container.
 - It exits with your command's exit code. Read that code directly; piping into `tail` hides it.
-- Only a few runs go at once across the machine; if others are running, yours waits its turn and says so. Run long suites as background commands.
+- Only a few runs go at once across the machine, and none start while memory pressure is critical; if yours has to wait, it says so. Run long suites as background commands.
 - The copy shares the container's dependency volumes. Do not install packages from it; that changes them for everyone.
 
 The older way also works: copy your code into the shared container. Use a scratch directory unique to your worktree so you never collide with another session:

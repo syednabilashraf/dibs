@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/syednabilashraf/dibs/internal/pressure"
 )
 
 func privateContainers(t *testing.T) []string {
@@ -21,6 +24,7 @@ func privateContainers(t *testing.T) []string {
 
 func TestCLITestRunsInAPrivateCopy(t *testing.T) {
 	s := newStack(t)
+	underPressure(t, pressure.Normal)
 	before := len(privateContainers(t))
 	code, out := dibs(t, "test", "--tree", s.a, s.container, "--", "cat", "/app/who")
 	if code != exitOK || !strings.Contains(out, "ticket-a") || !strings.Contains(out, "private copy of "+s.container) {
@@ -39,6 +43,7 @@ func TestCLITestRunsInAPrivateCopy(t *testing.T) {
 
 func TestCLITestLimitsRunsAcrossTheMachine(t *testing.T) {
 	s := newStack(t)
+	underPressure(t, pressure.Normal)
 	os.WriteFile(filepath.Join(os.Getenv("DIBS_HOME"), "config.yaml"), []byte(fmt.Sprintf("test:\n  max_parallel: 1\ncontainers:\n  %s:\n    ready:\n      settle: 500ms\n", s.container)), 0o644)
 	var wg sync.WaitGroup
 	outputs := make([]string, 2)
@@ -81,6 +86,7 @@ func absInt(n int) int {
 
 func TestCLITestSweepsCopiesLeftByDeadRuns(t *testing.T) {
 	s := newStack(t)
+	underPressure(t, pressure.Normal)
 	stale := fmt.Sprintf("dibs-test-stale-%d", time.Now().UnixNano())
 	sh(t, "docker", "run", "-d", "--name", stale, "--label", "dibs.test=1", "--label", "dibs.test.pid=999999", "busybox:latest", "sleep", "3600")
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", stale).Run() })
@@ -89,5 +95,30 @@ func TestCLITestSweepsCopiesLeftByDeadRuns(t *testing.T) {
 	}
 	if exec.Command("docker", "inspect", stale).Run() == nil {
 		t.Fatal("a copy whose dibs process is gone should be removed")
+	}
+}
+
+func TestPrivateRunsWaitOutCriticalMemoryPressure(t *testing.T) {
+	saved, savedRecheck := pressure.Current, memoryRecheck
+	t.Cleanup(func() { pressure.Current, memoryRecheck = saved, savedRecheck })
+	memoryRecheck = 10 * time.Millisecond
+	calls := 0
+	pressure.Current = func(context.Context) pressure.Level {
+		calls++
+		if calls < 3 {
+			return pressure.Critical
+		}
+		return pressure.Warning
+	}
+	var out bytes.Buffer
+	a := &app{env: &env{stdout: &out, stderr: &out}}
+	if err := a.waitForMemory(context.Background()); err != nil || calls != 3 || !strings.Contains(out.String(), "waiting for it to ease") {
+		t.Fatalf("err %v, calls %d, output %q", err, calls, out.String())
+	}
+	pressure.Current = func(context.Context) pressure.Level { return pressure.Critical }
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := a.waitForMemory(ctx); err == nil {
+		t.Fatal("a stopped wait is an error")
 	}
 }

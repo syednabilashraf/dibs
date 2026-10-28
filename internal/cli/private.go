@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/syednabilashraf/dibs/internal/docker"
+	"github.com/syednabilashraf/dibs/internal/pressure"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/swap"
 )
@@ -75,6 +76,9 @@ func runTest(e *env, args []string) int {
 		return e.errorf("%s: %v", name, err)
 	}
 
+	if err := a.waitForMemory(ctx); err != nil {
+		return e.errorf("%v", err)
+	}
 	release, err := a.testSlot(ctx)
 	if err != nil {
 		return e.errorf("%v", err)
@@ -156,6 +160,24 @@ func (a *app) testSlot(ctx context.Context) (func(), error) {
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+var memoryRecheck = 5 * time.Second
+
+func (a *app) waitForMemory(ctx context.Context) error {
+	announced := false
+	for pressure.Current(ctx) == pressure.Critical {
+		if !announced {
+			a.printf("dibs: this machine is out of memory (memory pressure is critical); waiting for it to ease before starting another container\n")
+			announced = true
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("stopped while waiting for memory pressure to ease")
+		case <-time.After(memoryRecheck):
+		}
+	}
+	return nil
 }
 
 func sweepPrivate(ctx context.Context, client *docker.Client) {

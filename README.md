@@ -76,7 +76,7 @@ dibs test web -- npx vitest run src/feature   # separate arguments run as given
 dibs test web 'cd sub && npm test'             # one string runs through sh -c
 ```
 
-Runs across the whole machine are limited to `test.max_parallel` at a time (default 2), so parallel sessions do not pile heavy test runs onto a machine that is already swapping; the rest wait their turn. `test.memory` caps each copy's memory.
+Runs across the whole machine are limited to `test.max_parallel` at a time (default 2), so parallel sessions do not pile heavy test runs onto a machine that is already swapping; the rest wait their turn. While the machine's memory pressure is critical, new runs also wait for it to ease. `test.memory` caps each copy's memory.
 
 Copying code into the shared container also works, and needs no lease. `dibs tmpdir` prints a path derived from the worktree's location, so two worktrees can never pick the same directory:
 
