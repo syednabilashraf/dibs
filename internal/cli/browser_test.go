@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/syednabilashraf/dibs/internal/browser"
 	"github.com/syednabilashraf/dibs/internal/config"
+	"github.com/syednabilashraf/dibs/internal/pressure"
 	"github.com/syednabilashraf/dibs/internal/state"
 )
 
@@ -182,5 +184,73 @@ func TestTakeGivesANewHolderACleanBrowser(t *testing.T) {
 	}
 	if _, closed := d.snapshot(); len(closed) != 1 {
 		t.Fatalf("taking again must not close the holder's own tabs: %v", closed)
+	}
+}
+
+func underPressure(t *testing.T, level pressure.Level) {
+	t.Helper()
+	saved := pressure.Current
+	pressure.Current = func(context.Context) pressure.Level { return level }
+	t.Cleanup(func() { pressure.Current = saved })
+}
+
+func TestBrowserHookAsksToWaitWhenMemoryIsCritical(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	w := browserWorld(t, port, "  chrome: /nonexistent/chrome\n", true)
+	cfg, _ := config.Load()
+	os.MkdirAll(cfg.Browser.Profile, 0o755)
+	os.Symlink(fmt.Sprintf("host-%d", os.Getpid()), filepath.Join(cfg.Browser.Profile, "SingletonLock"))
+
+	underPressure(t, pressure.Critical)
+	if _, out := callHook(t, "guard", browserCallInput(t, "take_screenshot", w.a.Path)); !strings.Contains(out, "Do not kill or relaunch it") {
+		t.Fatalf("a hung browser under memory pressure should be waited for: %q", out)
+	}
+	underPressure(t, pressure.Normal)
+	if _, out := callHook(t, "guard", browserCallInput(t, "take_screenshot", w.a.Path)); out != "" {
+		t.Fatalf("without pressure dibs stays out of the way: %q", out)
+	}
+}
+
+func TestBrowserHookHoldsBackTabsWhenMemoryIsCritical(t *testing.T) {
+	d := newDevtoolsStub(t, "about:blank")
+	w := browserWorld(t, d.port, "", true)
+	underPressure(t, pressure.Critical)
+	if _, out := callHook(t, "guard", browserCallInput(t, "new_page", w.a.Path)); out != "" {
+		t.Fatalf("a session with only the blank tab may open one: %q", out)
+	}
+	d.mu.Lock()
+	d.pages = append(d.pages, browser.Target{ID: "work", Type: "page", URL: "https://app.local/"})
+	d.mu.Unlock()
+	if _, out := callHook(t, "guard", browserCallInput(t, "new_page", w.a.Path)); !strings.Contains(out, "memory pressure is critical") {
+		t.Fatalf("under critical pressure, reuse a tab instead of opening more: %q", out)
+	}
+}
+
+func TestPostHookWarnsHoldersWhenMemoryIsCritical(t *testing.T) {
+	w := newHookWorld(t)
+	underPressure(t, pressure.Critical)
+	text := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_1", w.a.Path, "ls"))
+	if !strings.Contains(text, "memory pressure is critical") || !strings.Contains(text, "Pass what you are not testing with") {
+		t.Fatalf("a holder should be warned: %q", text)
+	}
+	if again := callPost(t, bashHook(t, "PostToolUse", "s-a", "toolu_2", w.a.Path, "ls")); again != "" {
+		t.Fatalf("the warning is not repeated on every call: %q", again)
+	}
+	if other := callPost(t, bashHook(t, "PostToolUse", "s-b", "toolu_3", w.b.Path, "ls")); other != "" {
+		t.Fatalf("a session holding nothing is not nagged: %q", other)
+	}
+}
+
+func TestPassClosesTheBrowserTabs(t *testing.T) {
+	d := newDevtoolsStub(t, "https://app.local/result", "about:blank")
+	w := browserWorld(t, d.port, "", true)
+	var out bytes.Buffer
+	if code := Run([]string{"pass", "--tree", w.a.Path}, strings.NewReader(""), &out, &out); code != exitOK {
+		t.Fatalf("pass: %d %s", code, out.String())
+	}
+	if _, closed := d.snapshot(); len(closed) != 1 || !strings.Contains(out.String(), "closed 1 tab(s) you had open") {
+		t.Fatalf("passing the browser closes its tabs: %v\n%s", closed, out.String())
 	}
 }

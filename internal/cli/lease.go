@@ -15,6 +15,7 @@ import (
 	"github.com/syednabilashraf/dibs/internal/docker"
 	"github.com/syednabilashraf/dibs/internal/guard"
 	"github.com/syednabilashraf/dibs/internal/preflight"
+	"github.com/syednabilashraf/dibs/internal/pressure"
 	"github.com/syednabilashraf/dibs/internal/queue"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/swap"
@@ -134,7 +135,10 @@ func runTake(e *env, args []string) int {
 	expires := time.Now().Add(*lease)
 	e.printf("dibs: %s holds %s until %s\n", t.Label, strings.Join(names, ", "), clock(expires))
 	if freshBrowser {
-		a.resetBrowser(ctx)
+		a.resetBrowser(ctx, "left by earlier holders")
+	}
+	if a.split(names) != nil && pressure.Current(ctx) == pressure.Critical {
+		e.printf("dibs: note: this machine is out of memory (memory pressure is critical), so containers may take much longer than usual to start\n")
 	}
 
 	containers := a.split(names)
@@ -242,13 +246,13 @@ func (a *app) wantsFreshBrowser(t *tree.Tree, names []string) bool {
 	return false
 }
 
-func (a *app) resetBrowser(ctx context.Context) {
+func (a *app) resetBrowser(ctx context.Context, whose string) {
 	if !browser.Managed(browserOptions(a.cfg)) {
 		return
 	}
 	closed, err := browser.ResetTabs(ctx, a.cfg.Browser.Port)
 	if err == nil && closed > 0 {
-		a.printf("dibs: browser: closed %d tab(s) left by earlier holders; it starts with one blank tab\n", closed)
+		a.printf("dibs: browser: closed %d tab(s) %s; it is left with one blank tab\n", closed, whose)
 	}
 }
 
@@ -518,6 +522,13 @@ func runPass(e *env, args []string) int {
 	}
 	a.store.Log(state.Event{Kind: "pass", Resource: strings.Join(released, ","), Tree: t.Path, Label: t.Label})
 	e.printf("dibs: passed %s\n", strings.Join(released, ", "))
+	for _, name := range released {
+		if name == config.BrowserResource && a.cfg.IsVirtual(name) {
+			passCtx, passCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			a.resetBrowser(passCtx, "you had open")
+			passCancel()
+		}
+	}
 	toRestore := failed
 	if *restore {
 		toRestore = a.split(released)

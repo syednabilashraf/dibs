@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/syednabilashraf/dibs/internal/pressure"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/swap"
 )
@@ -46,6 +47,11 @@ func runStatus(e *env, args []string) int {
 		e.printf("%s\n", data)
 		return exitOK
 	}
+	pressureCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if level := pressure.Current(pressureCtx); level == pressure.Warning || level == pressure.Critical {
+		e.printf("dibs: memory pressure on this machine is %s; containers and the browser may be slow, so hold off on heavy work\n\n", level)
+	}
+	cancel()
 	writeStatus(e.stdout, st, recent, now, a.lastCall)
 	return exitOK
 }
