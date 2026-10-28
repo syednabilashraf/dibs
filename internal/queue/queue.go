@@ -95,7 +95,7 @@ func Take(st *state.State, req Request, alive Alive) (Result, error) {
 	}
 
 	if !req.Enqueue {
-		if canGrant(st, req.Tree, req.Resources, now) && !wantedByOthers(st, req.Tree, req.Resources) {
+		if canGrant(st, req.Tree, req.Resources, now) && !reservedAgainst(st, req.Tree, req.Resources, len(st.Queue), now) {
 			grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, now)
 			return Result{Outcome: Granted}, nil
 		}
@@ -125,27 +125,101 @@ func Take(st *state.State, req Request, alive Alive) (Result, error) {
 
 func Schedule(st *state.State, now time.Time) []state.Waiter {
 	granted := []state.Waiter{}
-	wanted := map[string]bool{}
-	remaining := []state.Waiter{}
-	for _, w := range st.Queue {
-		blocked := false
-		for _, r := range w.Resources {
-			if wanted[r] {
-				blocked = true
+	for {
+		next := -1
+		for i, w := range st.Queue {
+			if canGrant(st, w.Tree, w.Resources, now) && !reservedAgainst(st, w.Tree, w.Resources, i, now) {
+				next = i
+				break
 			}
 		}
-		if !blocked && canGrant(st, w.Tree, w.Resources, now) {
-			grant(st, w.Tree, w.Label, w.Resources, w.Lease, w.NoSwap, now)
-			granted = append(granted, w)
+		if next < 0 {
+			return granted
+		}
+		w := st.Queue[next]
+		grant(st, w.Tree, w.Label, w.Resources, w.Lease, w.NoSwap, now)
+		granted = append(granted, w)
+		st.Queue = append(st.Queue[:next:next], st.Queue[next+1:]...)
+	}
+}
+
+func reservedAgainst(st *state.State, tree string, resources []string, before int, now time.Time) bool {
+	return len(reservations(st, tree, resources, before, now)) > 0
+}
+
+func reservations(st *state.State, tree string, resources []string, before int, now time.Time) []state.Waiter {
+	want := toSet(resources)
+	var waits graph
+	blocking := []state.Waiter{}
+	for _, e := range st.Queue[:min(before, len(st.Queue))] {
+		if e.Tree == tree || !overlaps(e.Resources, want) {
 			continue
 		}
-		remaining = append(remaining, w)
-		for _, r := range w.Resources {
-			wanted[r] = true
+		if waits == nil {
+			waits = waitGraph(st, now)
+		}
+		if !waits.reaches(e.Tree, tree) {
+			blocking = append(blocking, e)
 		}
 	}
-	st.Queue = remaining
-	return granted
+	return blocking
+}
+
+type graph map[string]map[string]bool
+
+func waitGraph(st *state.State, now time.Time) graph {
+	g := graph{}
+	edge := func(from, to string) {
+		if from == to {
+			return
+		}
+		if g[from] == nil {
+			g[from] = map[string]bool{}
+		}
+		g[from][to] = true
+	}
+	for i, w := range st.Queue {
+		want := toSet(w.Resources)
+		for _, name := range w.Resources {
+			if h := st.Lookup(name).ActiveHolder(now); h != nil {
+				edge(w.Tree, h.Tree)
+			}
+		}
+		for _, earlier := range st.Queue[:i] {
+			if overlaps(earlier.Resources, want) {
+				edge(w.Tree, earlier.Tree)
+			}
+		}
+	}
+	return g
+}
+
+func (g graph) reaches(from, to string) bool {
+	seen := map[string]bool{}
+	pending := []string{from}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for next := range g[current] {
+			if next == to {
+				return true
+			}
+			if !seen[next] {
+				seen[next] = true
+				pending = append(pending, next)
+			}
+		}
+	}
+	return false
+}
+
+func overlaps(resources []string, want map[string]bool) bool {
+	for _, r := range resources {
+		if want[r] {
+			return true
+		}
+	}
+	return false
 }
 
 func Pass(st *state.State, tree string, resources []string, now time.Time) []string {
@@ -365,21 +439,6 @@ func canGrant(st *state.State, tree string, resources []string, now time.Time) b
 	return true
 }
 
-func wantedByOthers(st *state.State, tree string, resources []string) bool {
-	want := toSet(resources)
-	for _, w := range st.Queue {
-		if w.Tree == tree {
-			continue
-		}
-		for _, r := range w.Resources {
-			if want[r] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func grant(st *state.State, tree, label string, resources []string, lease time.Duration, noSwap bool, now time.Time) {
 	for _, name := range resources {
 		r := st.Get(name)
@@ -442,7 +501,6 @@ func deadlocked(st *state.State, start string, now time.Time) bool {
 
 func describe(st *state.State, tree string, resources []string, now time.Time) Result {
 	result := Result{Outcome: Queued, Position: Position(st, tree)}
-	want := toSet(resources)
 	for _, name := range resources {
 		if h := st.Lookup(name).ActiveHolder(now); h != nil && h.Tree != tree {
 			result.Blockers = append(result.Blockers, Blocker{Resource: name, Holder: *h})
@@ -451,16 +509,12 @@ func describe(st *state.State, tree string, resources []string, now time.Time) R
 			}
 		}
 	}
-	for _, w := range st.Queue {
-		if w.Tree == tree {
-			break
-		}
-		for _, r := range w.Resources {
-			if want[r] {
-				result.Ahead = append(result.Ahead, w.Label)
-				break
-			}
-		}
+	before := len(st.Queue)
+	if position := Position(st, tree); position > 0 {
+		before = position - 1
+	}
+	for _, w := range reservations(st, tree, resources, before, now) {
+		result.Ahead = append(result.Ahead, w.Label)
 	}
 	return result
 }
