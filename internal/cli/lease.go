@@ -29,9 +29,9 @@ func runTake(e *env, args []string) int {
 	if err != nil {
 		return e.errorf("%v", err)
 	}
-	fs := newFlags(e, "take", "<resource|group>... [--wait] [--timeout 30m] [--lease 30m] [--no-swap] [--tree DIR]")
+	fs := newFlags(e, "take", "<resource|group>... [--wait] [--timeout DURATION] [--lease 30m] [--no-swap] [--tree DIR]")
 	wait := fs.Bool("wait", false, "queue until granted, then swap (run it in the background)")
-	timeout := fs.Duration("timeout", a.cfg.WaitTimeout.D(), "give up waiting after this long")
+	timeout := fs.Duration("timeout", a.cfg.WaitTimeout.D(), "give up waiting after this long, losing your place in line (default: wait until granted)")
 	lease := fs.Duration("lease", a.cfg.Lease.D(), "lease length")
 	noSwap := fs.Bool("no-swap", false, "hold the lock without recreating containers")
 	treeFlag := fs.String("tree", "", "worktree to act for (default: current directory)")
@@ -54,8 +54,12 @@ func runTake(e *env, args []string) int {
 		return e.errorf("%v", err)
 	}
 
-	deadline := time.Now().Add(*timeout)
+	var deadline time.Time
+	if *timeout > 0 {
+		deadline = time.Now().Add(*timeout)
+	}
 	last := ""
+	warned := false
 	for {
 		var result queue.Result
 		var takeErr error
@@ -89,9 +93,16 @@ func runTake(e *env, args []string) int {
 			e.printf("dibs: waiting: %s\n", message)
 			last = message
 		}
-		if time.Now().After(deadline) {
+		if !warned {
+			warned = true
+			if note := timeoutWarning(result, deadline); note != "" {
+				e.printf("%s\n", note)
+			}
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
 			a.leave(t.Path)
-			e.printf("dibs: gave up after %s\n", *timeout)
+			a.store.Log(state.Event{Kind: "abandon", Resource: strings.Join(names, ","), Tree: t.Path, Label: t.Label, Detail: "gave up after " + fmtDuration(*timeout)})
+			e.printf("dibs: gave up after %s, so your place in line is gone. Run the take again without --timeout to wait until it is granted.\n", fmtDuration(*timeout))
 			return exitNo
 		}
 		select {
@@ -275,6 +286,32 @@ func (a *app) describeWait(result queue.Result, now time.Time) string {
 		return "someone ahead in line wants the same resources"
 	}
 	return strings.Join(parts, "; ")
+}
+
+func timeoutWarning(result queue.Result, deadline time.Time) string {
+	if deadline.IsZero() {
+		return ""
+	}
+	reasons := []string{}
+	if n := len(result.Ahead); n > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d session(s) ahead of you want the same resources", n))
+	}
+	var latest time.Time
+	for _, b := range result.Blockers {
+		switch {
+		case b.Holder.Pinned():
+			reasons = append(reasons, fmt.Sprintf("a human pinned %s", b.Resource))
+		case b.Holder.Expires.After(deadline) && b.Holder.Expires.After(latest):
+			latest = b.Holder.Expires
+		}
+	}
+	if !latest.IsZero() {
+		reasons = append(reasons, "the lease you are waiting for runs until "+clock(latest))
+	}
+	if len(reasons) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("dibs: note: %s, and your --timeout runs out at %s, so you may give up before your turn and lose your place in line. Leave out --timeout to wait until granted.", strings.Join(reasons, "; "), clock(deadline))
 }
 
 func runPass(e *env, args []string) int {

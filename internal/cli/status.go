@@ -157,6 +157,9 @@ func eventText(ev state.Event) string {
 	case "hold":
 		return fmt.Sprintf("%s put %s on hold: %s", who, ev.Resource, ev.Detail)
 	case "abandon":
+		if ev.Detail != "" {
+			return fmt.Sprintf("%s stopped waiting for %s (%s)", who, ev.Resource, ev.Detail)
+		}
 		return fmt.Sprintf("%s stopped waiting for %s", who, ev.Resource)
 	case "grab":
 		return fmt.Sprintf("%s pinned %s by hand %s", who, ev.Resource, ev.Detail)
