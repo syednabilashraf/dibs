@@ -454,7 +454,7 @@ func runPass(e *env, args []string) int {
 	}
 	ctx, cancel := contextWithSignals()
 	defer cancel()
-	return a.restore(ctx, t, toRestore)
+	return a.restore(ctx, t, toRestore, false)
 }
 
 func runCheck(e *env, args []string) int {
@@ -641,8 +641,9 @@ func runRestore(e *env, args []string) int {
 	if err != nil {
 		return e.errorf("%v", err)
 	}
-	fs := newFlags(e, "restore", "<container|group>... | --all")
+	fs := newFlags(e, "restore", "<container|group>... | --all [--allow-migrations]")
 	all := fs.Bool("all", false, "every container dibs has managed")
+	allow := fs.Bool("allow-migrations", false, "restore even if a container's migrations check objects")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return exitError
@@ -667,10 +668,10 @@ func runRestore(e *env, args []string) int {
 	caller, _ := tree.Resolve("")
 	ctx, cancel := contextWithSignals()
 	defer cancel()
-	return a.restore(ctx, caller, names)
+	return a.restore(ctx, caller, names, *allow)
 }
 
-func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string) int {
+func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string, allowMigrations bool) int {
 	if len(names) == 0 {
 		return exitOK
 	}
@@ -687,11 +688,19 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string) in
 		return a.errorf("%v", err)
 	}
 	code := exitOK
+	synced, told := map[string]bool{}, map[string]bool{}
 	for _, name := range names {
 		if h := st.Lookup(name).ActiveHolder(time.Now()); h != nil && (caller == nil || h.Tree != caller.Path) {
 			a.printf("dibs: %s: skipped, held by %s\n", name, holderText(h))
 			code = exitNo
 			continue
+		}
+		if root := a.baselineRoot(ctx, sw, st, name); root != "" {
+			a.autoSync(ctx, st, root, synced)
+			if !allowMigrations && !a.restorePreflight(ctx, st, name, root, told) {
+				code = exitNo
+				continue
+			}
 		}
 		holder, ok := a.holdForRestore(name, caller)
 		if !ok {
@@ -743,6 +752,16 @@ func (a *app) holdForRestore(name string, caller *tree.Tree) (string, bool) {
 		return holder, true
 	}
 	return "", false
+}
+
+func (a *app) baselineRoot(ctx context.Context, sw *swap.Swapper, st *state.State, name string) string {
+	if r := st.Lookup(name); r != nil && len(r.BaselineRoots) > 0 {
+		return r.BaselineRoots[0]
+	}
+	if meta, err := sw.Describe(ctx, name); err == nil && len(meta.BaselineRoots) > 0 {
+		return meta.BaselineRoots[0]
+	}
+	return ""
 }
 
 func runGrab(e *env, args []string) int {

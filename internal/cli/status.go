@@ -190,6 +190,8 @@ func eventText(ev state.Event) string {
 		return fmt.Sprintf("%s pinned %s by hand %s", who, ev.Resource, ev.Detail)
 	case "drop":
 		return fmt.Sprintf("pins on %s dropped", ev.Resource)
+	case "sync":
+		return fmt.Sprintf("baseline %s fast-forwarded %s", ev.Tree, ev.Detail)
 	}
 	return fmt.Sprintf("%s %s %s", ev.Kind, ev.Resource, who)
 }
