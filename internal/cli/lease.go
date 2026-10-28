@@ -743,7 +743,7 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string, al
 				continue
 			}
 		}
-		holder, ok := a.holdForRestore(name, caller)
+		holder, ok := a.holdBriefly(name, caller, "restore")
 		if !ok {
 			a.printf("dibs: %s: skipped, someone in line is about to take it\n", name)
 			code = exitNo
@@ -753,12 +753,7 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string, al
 		if outcome != nil {
 			a.report(outcome)
 		}
-		if holder != "" {
-			a.store.Update(func(st *state.State) error {
-				queue.Pass(st, holder, []string{name}, time.Now())
-				return nil
-			})
-		}
+		a.letGo(holder, name)
 		if err != nil {
 			a.errorf("%v", err)
 			code = exitError
@@ -768,8 +763,18 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string, al
 	return code
 }
 
-func (a *app) holdForRestore(name string, caller *tree.Tree) (string, bool) {
-	holder, label := "dibs-restore", "dibs restore"
+func (a *app) letGo(holder, name string) {
+	if holder == "" {
+		return
+	}
+	a.store.Update(func(st *state.State) error {
+		queue.Pass(st, holder, []string{name}, time.Now())
+		return nil
+	})
+}
+
+func (a *app) holdBriefly(name string, caller *tree.Tree, purpose string) (string, bool) {
+	holder, label := "dibs-"+purpose, "dibs "+purpose
 	if caller != nil {
 		holder, label = caller.Path, caller.Label
 	}

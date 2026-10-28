@@ -11,8 +11,6 @@ import (
 	"github.com/syednabilashraf/dibs/internal/config"
 	"github.com/syednabilashraf/dibs/internal/docker"
 	"github.com/syednabilashraf/dibs/internal/preflight"
-	"github.com/syednabilashraf/dibs/internal/queue"
-	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/swap"
 	"github.com/syednabilashraf/dibs/internal/tree"
 )
@@ -102,15 +100,13 @@ func runRefresh(e *env, args []string) int {
 				}
 			}
 		}
-		holder, ok := a.holdWhileRestarting(name, caller)
+		holder, ok := a.holdBriefly(name, caller, "refresh")
 		if !ok {
 			e.printf("dibs: %s: skipped, someone in line is about to take it (a take starts it fresh anyway)\n", name)
 			continue
 		}
 		outcome, err := sw.Restart(ctx, name)
-		if holder != "" {
-			a.release(holder, []string{name})
-		}
+		a.letGo(holder, name)
 		if outcome != nil && outcome.Waited >= time.Second {
 			e.printf("dibs: %s: waited %s for running execs\n", name, outcome.Waited.Round(time.Second))
 		}
@@ -150,31 +146,4 @@ func indentLines(text string) string {
 		return "    (no output)"
 	}
 	return "    " + strings.ReplaceAll(text, "\n", "\n    ")
-}
-
-func (a *app) holdWhileRestarting(name string, caller *tree.Tree) (string, bool) {
-	holder, label := "dibs-refresh", "dibs refresh"
-	if caller != nil {
-		holder, label = caller.Path, caller.Label
-	}
-	mine, granted := false, false
-	a.store.Update(func(st *state.State) error {
-		if h := st.Lookup(name).ActiveHolder(time.Now()); h != nil && h.Tree == holder {
-			mine = true
-			return nil
-		}
-		result, err := queue.Take(st, queue.Request{
-			Tree: holder, Label: label, Resources: []string{name},
-			Lease: a.cfg.ReadyTimeout.D() + 10*time.Minute, PID: os.Getpid(),
-		}, state.ProcessAlive)
-		granted = err == nil && result.Outcome == queue.Granted
-		return nil
-	})
-	switch {
-	case mine:
-		return "", true
-	case granted:
-		return holder, true
-	}
-	return "", false
 }

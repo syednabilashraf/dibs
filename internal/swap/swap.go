@@ -265,12 +265,7 @@ func (s *Swapper) Restart(ctx context.Context, name string) (*Outcome, error) {
 		return outcome, fmt.Errorf("%s: restart: %w", name, err)
 	}
 	s.Store.Log(state.Event{Kind: "refresh", Resource: name, Tree: outcome.Serving, Label: outcome.ServingLabel, Actor: s.Actor})
-	if err := s.WaitReady(ctx, name, summary.ID); err != nil {
-		s.setStatus(name, state.StatusFailed)
-		return outcome, fmt.Errorf("%s: %w", name, err)
-	}
-	s.setStatus(name, state.StatusReady)
-	return outcome, nil
+	return outcome, s.settle(ctx, name, summary.ID, outcome)
 }
 
 func (s *Swapper) dropped(parent context.Context, id string, live map[string]any) Dropped {
