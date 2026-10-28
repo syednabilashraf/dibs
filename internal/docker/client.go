@@ -240,17 +240,53 @@ func (c *Client) ExecInspect(ctx context.Context, id string) (Exec, error) {
 
 func Demux(r io.Reader) (string, error) {
 	var out strings.Builder
+	err := DemuxTo(&out, r)
+	return out.String(), err
+}
+
+func DemuxTo(w io.Writer, r io.Reader) error {
 	header := make([]byte, 8)
 	for {
 		if _, err := io.ReadFull(r, header); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return out.String(), nil
+				return nil
 			}
-			return out.String(), err
+			return err
 		}
 		size := binary.BigEndian.Uint32(header[4:])
-		if _, err := io.CopyN(&out, r, int64(size)); err != nil {
-			return out.String(), nil
+		if _, err := io.CopyN(w, r, int64(size)); err != nil {
+			return nil
 		}
 	}
+}
+
+func (c *Client) Follow(ctx context.Context, id string, tty bool, w io.Writer) error {
+	query := url.Values{"stdout": {"1"}, "stderr": {"1"}, "follow": {"1"}}
+	path := "/containers/" + url.PathEscape(id) + "/logs"
+	if tty {
+		return c.do(ctx, http.MethodGet, path, query, nil, w)
+	}
+	reader, writer := io.Pipe()
+	go func() { writer.CloseWithError(c.do(ctx, http.MethodGet, path, query, nil, writer)) }()
+	return DemuxTo(w, reader)
+}
+
+func (c *Client) Wait(ctx context.Context, id string) (int, error) {
+	var result struct {
+		StatusCode int `json:"StatusCode"`
+	}
+	err := c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/wait", url.Values{"condition": {"not-running"}}, nil, &result)
+	return result.StatusCode, err
+}
+
+type Listed struct {
+	ID     string            `json:"Id"`
+	Labels map[string]string `json:"Labels"`
+}
+
+func (c *Client) ListLabeled(ctx context.Context, label string) ([]Listed, error) {
+	filters, _ := json.Marshal(map[string][]string{"label": {label}})
+	var listed []Listed
+	err := c.do(ctx, http.MethodGet, "/containers/json", url.Values{"all": {"1"}, "filters": {string(filters)}}, nil, &listed)
+	return listed, err
 }

@@ -107,7 +107,18 @@ If you are told that sessions are waiting for what you hold, pass what you are n
 
 ## Unit tests need no lease
 
-Tests that run from a copy of your code inside a container do not need that container to serve your worktree. Use a scratch directory unique to your worktree so you never collide with another session:
+Run them with `dibs test`, which starts a private copy of the container (same image, environment and installed dependencies) with your worktree mounted, runs the command, and removes the copy:
+
+```bash
+dibs test <container> -- <test command>
+```
+
+- Nothing another session does can kill it, and it cannot affect the shared container.
+- It exits with your command's exit code. Read that code directly; piping into `tail` hides it.
+- Only a few runs go at once across the machine, and none start while memory pressure is critical; if yours has to wait, it says so. Run long suites as background commands.
+- The copy shares the container's dependency volumes. Do not install packages from it; that changes them for everyone.
+
+The older way also works: copy your code into the shared container. Use a scratch directory unique to your worktree so you never collide with another session:
 
 ```bash
 dir=$(dibs tmpdir)
@@ -160,6 +171,7 @@ These are facts about the shared environment. Act on them before interpreting te
 | `dibs hold --for <time> --note <why>` | Keep your leases without tool calls for a while (the user is testing, or you wait for the user). |
 | `dibs status` | Holders, what each container runs, the queue, recent swaps. |
 | `dibs line` | The queue. |
+| `dibs test <container> -- <command>` | Run tests in a private copy of a container with your worktree mounted. |
 | `dibs tmpdir` | Your worktree's scratch path for copies inside containers. |
 | `dibs restore <container>` | Put a container back on the baseline (unheld, or held by you). |
 | `dibs refresh` | Restart declared containers that started before host credentials changed. |

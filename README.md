@@ -69,7 +69,16 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 
 ### Unit tests without a lease
 
-Tests that run from a copy of the code inside a container do not need the container to serve your worktree. `dibs tmpdir` prints a path derived from the worktree's location, so two worktrees can never pick the same directory:
+`dibs test <container> -- <command>` runs a command in a private, throwaway copy of a container: same image, environment, volumes (so installed dependencies are reused) and networks, with your worktree mounted where the container mounts the repository. The copy publishes no ports, answers to none of the service's network names, has no healthcheck or restart policy, and is removed afterwards. A take by another session cannot touch it, and it cannot touch the shared container. It exits with the command's exit code.
+
+```bash
+dibs test web -- npx vitest run src/feature   # separate arguments run as given
+dibs test web 'cd sub && npm test'             # one string runs through sh -c
+```
+
+Runs across the whole machine are limited to `test.max_parallel` at a time (default 2), so parallel sessions do not pile heavy test runs onto a machine that is already swapping; the rest wait their turn. While the machine's memory pressure is critical, new runs also wait for it to ease. `test.memory` caps each copy's memory.
+
+Copying code into the shared container also works, and needs no lease. `dibs tmpdir` prints a path derived from the worktree's location, so two worktrees can never pick the same directory:
 
 ```bash
 dir=$(dibs tmpdir)                                  # /tmp/dibs-app-ticket-b-3f2a9c1d
@@ -148,6 +157,10 @@ refresh:                             # containers `dibs refresh` may restart
   watch: [~/.config/cloud/credentials.json]   # restart only containers started before these changed
   check: 'cloud-cli auth print-token >/dev/null'   # must pass on the host first
 
+test:
+  max_parallel: 2                    # `dibs test` runs at once on this machine
+  memory: 8g                         # memory cap for each private copy
+
 browser:
   port: 9222
   profile: ~/.cache/dibs/chrome-profile   # any dedicated profile; keep it logged in
@@ -184,6 +197,7 @@ Exit 0 means starting the container on that checkout is safe. Anything else mean
 | `dibs baseline sync [--stash] [--allow-migrations] [--no-fetch]` | fetch and fast-forward the baseline when it is safe |
 | `dibs grab <res>... [--note] [--tree]` / `dibs drop [res...]` | human override |
 | `dibs status [--json]`, `dibs line` | who holds what, the queue, recent swaps |
+| `dibs test [--workdir] [--env K=V] [--memory] <container> -- <command>` | run tests in a private copy of a container |
 | `dibs tmpdir` | per-worktree scratch path |
 | `dibs guard [--post]`, `dibs context` | Claude Code hooks |
 | `dibs browser-mcp [args...]` | shared Chrome for chrome-devtools-mcp |

@@ -205,3 +205,16 @@ func TestBrowserToolsAndTabLimit(t *testing.T) {
 		t.Fatalf("configured: %+v", cfg.Browser)
 	}
 }
+
+func TestTestSettings(t *testing.T) {
+	t.Setenv("DIBS_CONFIG", filepath.Join(t.TempDir(), "missing.yaml"))
+	cfg, _ := Load()
+	if cfg.Test.MaxParallel != 2 || cfg.Test.Memory != "" {
+		t.Fatalf("defaults: %+v", cfg.Test)
+	}
+	writeConfig(t, "test:\n  max_parallel: 4\n  memory: 6g\n")
+	cfg, _ = Load()
+	if cfg.Test.MaxParallel != 4 || cfg.Test.Memory != "6g" {
+		t.Fatalf("configured: %+v", cfg.Test)
+	}
+}
