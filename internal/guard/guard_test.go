@@ -95,7 +95,7 @@ func TestBrowserRules(t *testing.T) {
 	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), true, "web is held by ticket-a")
 
 	st.Resources["web"].Holder = nil
-	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), true, "still running ticket-a")
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), true, "web still runs ticket-a")
 	expect(t, Decide(w.cfg, st, w.a, browserCall(), now, alive), false, "")
 
 	st.Resources["web"].Serving = ""
@@ -111,7 +111,7 @@ func TestBrowserWhileMySwapIsInFlight(t *testing.T) {
 	web := st.Resources["web"]
 
 	web.Status, web.Intent = state.StatusSwapping, &state.Intent{PID: 4242}
-	expect(t, Decide(w.cfg, st, w.a, browserCall(), now, alive), true, "still being switched")
+	expect(t, Decide(w.cfg, st, w.a, browserCall(), now, alive), true, "has not finished switching it")
 
 	web.Intent.PID = 1
 	expect(t, Decide(w.cfg, st, w.a, browserCall(), now, alive), true, "was interrupted")
@@ -123,6 +123,64 @@ func TestBrowserWhileMySwapIsInFlight(t *testing.T) {
 	web.Serving = w.main.Path
 	web.Holder.NoSwap = true
 	expect(t, Decide(w.cfg, st, w.a, browserCall(), now, alive), false, "")
+}
+
+func (w world) holds(tr *state.Holder, names ...string) *state.State {
+	st := w.aHoldsEverything()
+	for _, name := range names {
+		copied := *tr
+		st.Resources[name].Holder = &copied
+	}
+	return st
+}
+
+func TestATakerOnlyNeedsWhatItTook(t *testing.T) {
+	w := newWorld(t)
+	st := w.holds(w.session(w.b), "browser", "api")
+	st.Resources["api"].Serving, st.Resources["api"].ServingLabel = w.b.Path, w.b.Label
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), false, "")
+
+	st.Resources["web"].Holder = nil
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), false, "")
+	expect(t, Decide(w.cfg, st, w.b, bash("npx playwright test", w.b.Path), now, alive), false, "")
+	expect(t, Decide(w.cfg, st, w.b, bash("curl localhost:3000/health", w.b.Path), now, alive), true, "port 3000 is web")
+
+	st = w.holds(w.session(w.b), "browser")
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), false, "")
+}
+
+func TestATakerWaitsForEverythingItTook(t *testing.T) {
+	w := newWorld(t)
+	st := w.holds(w.session(w.b), "browser", "web", "api")
+	st.Resources["api"].Serving = w.a.Path
+	d := Decide(w.cfg, st, w.b, browserCall(), now, alive)
+	expect(t, d, true, "you hold api, web, but your `dibs take` has not finished switching them")
+	expect(t, Decide(w.cfg, st, w.b, bash("pnpm test:e2e", w.b.Path), now, alive), true, "so a test run would still show other code")
+
+	for _, name := range []string{"web", "api"} {
+		st.Resources[name].Serving = w.b.Path
+	}
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), false, "")
+}
+
+func TestTheBaselineCheckoutServesItself(t *testing.T) {
+	w := newWorld(t)
+	st := w.holds(w.session(w.main), "browser", "api")
+	expect(t, Decide(w.cfg, st, w.main, browserCall(), now, alive), false, "")
+}
+
+func TestANonHolderHearsEveryProblemAtOnce(t *testing.T) {
+	w := newWorld(t)
+	st := w.aHoldsEverything()
+	st.Resources["browser"].Holder = nil
+	st.Resources["web"].Holder = nil
+	st.Resources["api"].Holder = w.session(w.a)
+	d := Decide(w.cfg, st, w.b, browserCall(), now, alive)
+	expect(t, d, true, "api is held by ticket-a")
+	expect(t, d, true, "web still runs ticket-a (worktree app-a)'s code")
+	if strings.Contains(d.Reason, "dibs restore") {
+		t.Fatalf("do not send sessions to restore containers they did not ask for: %s", d.Reason)
+	}
 }
 
 func TestExpiredLeaseIsNotAHolder(t *testing.T) {
@@ -431,4 +489,13 @@ func TestStripDibs(t *testing.T) {
 			t.Errorf("StripDibs(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func TestATakerWaitsForAContainerThatIsStillStarting(t *testing.T) {
+	w := newWorld(t)
+	st := w.holds(w.session(w.b), "browser", "web")
+	st.Resources["web"].Serving, st.Resources["web"].Status = w.b.Path, state.StatusStarting
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), true, "web runs your worktree but is not ready yet")
+	st.Resources["web"].Status = state.StatusReady
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), false, "")
 }

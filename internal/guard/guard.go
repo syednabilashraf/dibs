@@ -191,33 +191,80 @@ func (v view) browser() Decision {
 			}
 		}
 	}
+	if !v.holdsAnything() {
+		return v.stackForNonHolder("the browser would show their code, not yours", config.BrowserResource)
+	}
+	return v.mineReady("the browser")
+}
+
+func (v view) holdsAnything() bool {
+	return v.self != "" && len(v.st.HeldBy(v.self, v.now)) > 0
+}
+
+func (v view) servesMe(r *state.Resource) bool {
+	if r.Serving == v.self {
+		return true
+	}
+	_, baseline := v.roots[v.self]
+	return r.Serving == "" && baseline
+}
+
+func (v view) mineReady(what string) Decision {
+	var switching, stalled, failed, starting []string
+	for _, name := range v.containers() {
+		r := v.st.Resources[name]
+		mine := v.mine(r)
+		if mine == nil || mine.NoSwap {
+			continue
+		}
+		switch {
+		case v.stalled(r):
+			stalled = append(stalled, name)
+		case r.Status == state.StatusFailed:
+			failed = append(failed, name)
+		case v.swapping(r) || !v.servesMe(r):
+			switching = append(switching, name)
+		case r.Status == state.StatusStarting:
+			starting = append(starting, name)
+		}
+	}
+	switch {
+	case len(failed) > 0:
+		return deny("%s failed to start on your worktree. Check `docker logs %s` and fix it (often missing dependencies, which you can install inside the container), then run `dibs take %s` again to re-check it without recreating it. Or `dibs pass` to put it back on the baseline.", strings.Join(failed, ", "), failed[0], strings.Join(failed, " "))
+	case len(stalled) > 0:
+		return deny("switching %s to your worktree was interrupted. Run `dibs take %s` again to finish it.", strings.Join(stalled, ", "), strings.Join(stalled, " "))
+	case len(starting) > 0:
+		return deny("%s runs your worktree but is not ready yet. Run `dibs take %s` again, which waits for it without recreating it, then retry.", strings.Join(starting, ", "), strings.Join(starting, " "))
+	case len(switching) > 0:
+		return deny("you hold %s, but your `dibs take` has not finished switching %s to your worktree, so %s would still show other code there. Wait for the take to finish, then retry.", strings.Join(switching, ", "), pronoun(switching), what)
+	}
+	return allow()
+}
+
+func (v view) stackForNonHolder(consequence string, take string) Decision {
+	parts := []string{}
+	names := []string{}
 	for _, name := range v.containers() {
 		r := v.st.Resources[name]
 		if h := v.otherHolder(r); h != nil {
-			return deny("%s is held by %s %s, so the browser would show their code, not yours. Run `dibs take %s %s --wait` in the background and retry when it returns.", name, who(h), since(h), config.BrowserResource, name)
-		}
-		if mine := v.mine(r); mine != nil {
-			if v.swapping(r) {
-				return deny("%s is still being switched to your worktree. Wait for `dibs take` to finish, then retry.", name)
-			}
-			if v.stalled(r) {
-				return deny("switching %s to your worktree was interrupted. Run `dibs take %s` again to finish it.", name, name)
-			}
-			if r.Status == state.StatusFailed {
-				return deny("%s failed to start on your worktree. Check `docker logs %s` and fix it (often missing dependencies, which you can install inside the container), then run `dibs take %s` again to re-check it without recreating it. Or `dibs pass` to put it back on the baseline.", name, name, name)
-			}
-			if r.Status == state.StatusStarting {
-				return deny("%s runs your worktree but is not ready yet. Run `dibs take %s` again, which waits for it without recreating it, then retry.", name, name)
-			}
-			if mine.NoSwap {
-				continue
-			}
-		}
-		if v.servingOther(r) {
-			return deny("%s is still running %s's code; nobody holds it. Run `dibs take %s %s --wait` to switch it to your worktree (or `dibs restore %s` for the baseline), then retry.", name, servingWho(r), config.BrowserResource, name, name)
+			parts = append(parts, fmt.Sprintf("%s is held by %s %s", name, who(h), since(h)))
+			names = append(names, name)
+		} else if v.servingOther(r) {
+			parts = append(parts, fmt.Sprintf("%s still runs %s's code", name, servingWho(r)))
+			names = append(names, name)
 		}
 	}
-	return allow()
+	if len(parts) == 0 {
+		return allow()
+	}
+	return deny("you hold nothing, so you are testing the shared stack as it is, and %s; %s. Take %s together with the containers your change touches (for example `dibs take %s <containers> --wait` in the background) and retry when it returns. Containers you do not take keep whatever code they run, so take every one your change needs.", strings.Join(parts, "; "), consequence, take, take)
+}
+
+func pronoun(names []string) string {
+	if len(names) == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 var (
@@ -270,31 +317,31 @@ func (v view) bash(command, cwd string) Decision {
 		}
 	}
 
-	notMine := []string{}
 	for _, name := range names {
 		r := v.st.Resources[name]
-		if v.mine(r) != nil {
+		if v.mine(r) != nil || !v.cfg.Guard.CheckPorts() {
 			continue
 		}
-		h := v.otherHolder(r)
-		if h == nil && !v.servingOther(r) {
+		if v.otherHolder(r) == nil && !v.servingOther(r) {
 			continue
 		}
-		notMine = append(notMine, name)
-		if v.cfg.Guard.CheckPorts() {
-			for _, port := range r.Ports {
-				re := regexp.MustCompile(fmt.Sprintf(`(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):%d\b`, port))
-				if re.MatchString(command) {
-					return deny("port %d is %s, which is serving %s, not your worktree, so any result would describe their code. Run `dibs take %s --wait` first.", port, name, servingWho(r), name)
-				}
+		for _, port := range r.Ports {
+			re := regexp.MustCompile(fmt.Sprintf(`(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):%d\b`, port))
+			if re.MatchString(command) {
+				return deny("port %d is %s, which is serving %s, not your worktree, so any result would describe their code. Run `dibs take %s --wait` first.", port, name, servingWho(r), name)
 			}
 		}
 	}
-	if len(notMine) > 0 {
-		for _, pattern := range v.cfg.Guard.UsePatterns {
-			if re, err := regexp.Compile(pattern); err == nil && re.MatchString(command) {
-				return deny("this looks like a test run against the shared stack, but %s serve other worktrees right now. Run `dibs take <what you need> --wait` in the background first, then rerun.", strings.Join(notMine, ", "))
+	for _, pattern := range v.cfg.Guard.UsePatterns {
+		if re, err := regexp.Compile(pattern); err == nil && re.MatchString(command) {
+			if !v.holdsAnything() {
+				if d := v.stackForNonHolder("a test run would exercise their code, not yours", "<containers>"); d.Deny {
+					return d
+				}
+			} else if d := v.mineReady("a test run"); d.Deny {
+				return d
 			}
+			break
 		}
 	}
 
