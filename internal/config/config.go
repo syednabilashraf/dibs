@@ -31,10 +31,13 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
 type Ready struct {
-	Log    string   `yaml:"log"`
-	HTTP   string   `yaml:"http"`
-	TCP    string   `yaml:"tcp"`
-	Settle Duration `yaml:"settle"`
+	Log         string   `yaml:"log"`
+	Fail        string   `yaml:"fail"`
+	HTTP        string   `yaml:"http"`
+	TCP         string   `yaml:"tcp"`
+	Settle      Duration `yaml:"settle"`
+	Timeout     Duration `yaml:"timeout"`
+	MaxRestarts int      `yaml:"max_restarts"`
 }
 
 type Container struct {

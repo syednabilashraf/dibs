@@ -6,12 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -23,9 +20,10 @@ import (
 )
 
 var (
-	ErrNoRepoMounts = errors.New("none of its bind mounts come from this repository, so it cannot serve your worktree")
-	ErrInterrupted  = errors.New("interrupted")
-	ErrNotReady     = errors.New("not ready")
+	ErrNoRepoMounts  = errors.New("none of its bind mounts come from this repository, so it cannot serve your worktree")
+	ErrInterrupted   = errors.New("interrupted")
+	ErrNotReady      = errors.New("not ready")
+	ErrStillStarting = errors.New("still starting")
 )
 
 type Swapper struct {
@@ -170,16 +168,13 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 	if live != nil && summary.Running && outcome.Previous == servingPath {
 		meta.ContainerID = summary.ID
 		s.record(name, meta, servingPath, servingLabel, state.StatusSwapping, time.Time{})
-		if err := s.WaitReady(ctx, name, summary.ID); err != nil {
-			s.setStatus(name, state.StatusFailed)
-			return outcome, fmt.Errorf("%s: %w", name, err)
-		}
-		s.setStatus(name, state.StatusReady)
-		return outcome, nil
+		return outcome, s.settle(ctx, name, summary.ID, outcome)
 	}
 
+	var previous state.Status
 	if err := s.Store.Update(func(st *state.State) error {
 		r := st.Get(name)
+		previous = r.Status
 		r.Status = state.StatusSwapping
 		r.Intent = &state.Intent{Target: servingPath, PID: os.Getpid(), Started: time.Now()}
 		return nil
@@ -190,6 +185,10 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 	if live != nil && summary.Running {
 		waited, running := s.waitExecs(ctx, name, summary.ID)
 		outcome.Waited, outcome.Interrupted = waited, running
+		if ctx.Err() != nil {
+			s.setStatus(name, previous)
+			return outcome, fmt.Errorf("%s: %w before it was recreated; it still serves what it did", name, ErrInterrupted)
+		}
 	}
 
 	oldID := ""
@@ -215,18 +214,30 @@ func (s *Swapper) Serve(ctx context.Context, name string, target *tree.Tree) (*O
 	s.record(name, meta, servingPath, servingLabel, state.StatusSwapping, time.Now())
 	s.Store.Log(state.Event{Kind: "swap", Resource: name, Tree: servingPath, Label: servingLabel, Actor: s.Actor, Detail: outcome.PreviousLabel})
 	if interrupted {
-		return outcome, ErrInterrupted
+		s.setStatus(name, state.StatusStarting)
+		return outcome, fmt.Errorf("%s: %w after it was recreated", name, ErrInterrupted)
 	}
+	return outcome, s.settle(ctx, name, id, outcome)
+}
 
-	if err := s.WaitReady(ctx, name, id); err != nil {
-		s.setStatus(name, state.StatusFailed)
-		if outcome.Dropped.Worth() {
-			return outcome, fmt.Errorf("%s: %w\nThe original container had %s, and this recreate dropped them; the code it now runs may depend on them (for example packages installed at runtime: reinstall them in the container, or rebuild its image)", name, err, outcome.Dropped)
-		}
-		return outcome, fmt.Errorf("%s: %w", name, err)
+func (s *Swapper) settle(ctx context.Context, name, id string, outcome *Outcome) error {
+	err := s.WaitReady(ctx, name, id)
+	switch {
+	case err == nil:
+		s.setStatus(name, state.StatusReady)
+		return nil
+	case ctx.Err() != nil:
+		s.setStatus(name, state.StatusStarting)
+		return fmt.Errorf("%s: %w while it was starting; it keeps starting on its own", name, ErrInterrupted)
+	case errors.Is(err, ErrStillStarting):
+		s.setStatus(name, state.StatusStarting)
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	s.setStatus(name, state.StatusReady)
-	return outcome, nil
+	s.setStatus(name, state.StatusFailed)
+	if outcome.Dropped.Worth() {
+		return fmt.Errorf("%s: %w\nThe original container had %s, and this recreate dropped them; the code it now runs may depend on them (for example packages installed at runtime: reinstall them in the container, or rebuild its image)", name, err, outcome.Dropped)
+	}
+	return fmt.Errorf("%s: %w", name, err)
 }
 
 func (s *Swapper) dropped(parent context.Context, id string, live map[string]any) Dropped {
@@ -446,9 +457,10 @@ func (s *Swapper) runningExecs(ctx context.Context, id string) []string {
 		return nil
 	}
 	running := []string{}
-	for _, execID := range docker.Summarize(live).ExecIDs {
+	summary := docker.Summarize(live)
+	for _, execID := range summary.ExecIDs {
 		ex, err := s.Docker.ExecInspect(ctx, execID)
-		if err != nil || !ex.Running {
+		if err != nil || !ex.Running || summary.IsHealthcheck(ex.Command()) {
 			continue
 		}
 		command := ex.Command()
@@ -458,71 +470,6 @@ func (s *Swapper) runningExecs(ctx context.Context, id string) []string {
 		running = append(running, command)
 	}
 	return running
-}
-
-func (s *Swapper) WaitReady(ctx context.Context, name, id string) error {
-	ready := s.Config.ContainerConfig(name).Ready
-	var logPattern *regexp.Regexp
-	if ready.Log != "" {
-		compiled, err := regexp.Compile(ready.Log)
-		if err != nil {
-			return fmt.Errorf("containers.%s.ready.log: %w", name, err)
-		}
-		logPattern = compiled
-	}
-	settle := ready.Settle.D()
-	if settle == 0 {
-		settle = 3 * time.Second
-	}
-	probes := logPattern != nil || ready.HTTP != "" || ready.TCP != ""
-	deadline := time.Now().Add(s.Config.ReadyTimeout.D())
-	logSeen, httpSeen, tcpSeen := logPattern == nil, ready.HTTP == "", ready.TCP == ""
-	announced := false
-
-	for {
-		raw, err := s.Docker.Inspect(ctx, id)
-		if err != nil {
-			return err
-		}
-		summary := docker.Summarize(raw)
-		if !summary.Running {
-			logs, _ := s.Docker.Logs(ctx, id, time.Time{}, summary.Tty)
-			return fmt.Errorf("%w: exited during startup (%s); last output:\n%s", ErrNotReady, summary.Status, tail(logs, 20))
-		}
-		ok := true
-		if summary.HasHealthcheck {
-			ok = summary.Health == "healthy"
-		}
-		if !logSeen {
-			logs, _ := s.Docker.Logs(ctx, id, time.Time{}, summary.Tty)
-			logSeen = logPattern.MatchString(logs)
-		}
-		if !httpSeen {
-			httpSeen = httpAnswers(ctx, ready.HTTP)
-		}
-		if !tcpSeen {
-			tcpSeen = tcpAnswers(ready.TCP)
-		}
-		ok = ok && logSeen && httpSeen && tcpSeen
-		if !summary.HasHealthcheck && !probes {
-			ok = !summary.StartedAt.IsZero() && time.Since(summary.StartedAt) >= settle
-		}
-		if ok {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%w after %s (healthcheck=%v log=%v http=%v tcp=%v)", ErrNotReady, s.Config.ReadyTimeout.D(), summary.Health, logSeen, httpSeen, tcpSeen)
-		}
-		if !announced && (probes || summary.HasHealthcheck) {
-			s.printf("%s: waiting for it to become ready\n", name)
-			announced = true
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
 }
 
 func BindSources(inspect map[string]any) []string {
@@ -540,30 +487,6 @@ func BindSources(inspect map[string]any) []string {
 		}
 	}
 	return sources
-}
-
-func httpAnswers(ctx context.Context, url string) bool {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode < 500
-}
-
-func tcpAnswers(address string) bool {
-	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
 }
 
 func tail(text string, lines int) string {

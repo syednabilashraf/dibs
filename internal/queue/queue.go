@@ -89,14 +89,14 @@ func Take(st *state.State, req Request, alive Alive) (Result, error) {
 	Prune(st, now, alive)
 
 	if holdsAll(st, req.Tree, req.Resources, now) {
-		grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, now)
+		grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, req.PID, now)
 		Leave(st, req.Tree)
 		return Result{Outcome: Granted}, nil
 	}
 
 	if !req.Enqueue {
 		if canGrant(st, req.Tree, req.Resources, now) && !reservedAgainst(st, req.Tree, req.Resources, len(st.Queue), now) {
-			grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, now)
+			grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, req.PID, now)
 			return Result{Outcome: Granted}, nil
 		}
 		return describe(st, req.Tree, req.Resources, now), nil
@@ -137,7 +137,7 @@ func Schedule(st *state.State, now time.Time) []state.Waiter {
 			return granted
 		}
 		w := st.Queue[next]
-		grant(st, w.Tree, w.Label, w.Resources, w.Lease, w.NoSwap, now)
+		grant(st, w.Tree, w.Label, w.Resources, w.Lease, w.NoSwap, w.PID, now)
 		granted = append(granted, w)
 		st.Queue = append(st.Queue[:next:next], st.Queue[next+1:]...)
 	}
@@ -439,7 +439,7 @@ func canGrant(st *state.State, tree string, resources []string, now time.Time) b
 	return true
 }
 
-func grant(st *state.State, tree, label string, resources []string, lease time.Duration, noSwap bool, now time.Time) {
+func grant(st *state.State, tree, label string, resources []string, lease time.Duration, noSwap bool, taker int, now time.Time) {
 	for _, name := range resources {
 		r := st.Get(name)
 		if h := r.ActiveHolder(now); h != nil && h.Tree == tree {
@@ -447,6 +447,7 @@ func grant(st *state.State, tree, label string, resources []string, lease time.D
 				h.Expires = now.Add(lease)
 				h.NoSwap = noSwap
 				h.HoldSince, h.Note = time.Time{}, ""
+				h.Taker = taker
 			}
 			continue
 		}
@@ -457,8 +458,35 @@ func grant(st *state.State, tree, label string, resources []string, lease time.D
 			Since:   now,
 			Expires: now.Add(lease),
 			NoSwap:  noSwap,
+			Taker:   taker,
 		}
 	}
+}
+
+func Settle(st *state.State, tree string, taker int, now time.Time) {
+	for _, name := range st.HeldBy(tree, now) {
+		if h := st.Resources[name].Holder; h.Taker == taker {
+			h.Taker = 0
+		}
+	}
+}
+
+func Takers(st *state.State, tree string, now time.Time) []int {
+	seen := map[int]bool{}
+	takers := []int{}
+	for _, name := range st.HeldBy(tree, now) {
+		if pid := st.Resources[name].Holder.Taker; pid > 0 && !seen[pid] {
+			seen[pid] = true
+			takers = append(takers, pid)
+		}
+	}
+	for _, w := range st.Queue {
+		if w.Tree == tree && w.PID > 0 && !seen[w.PID] {
+			seen[w.PID] = true
+			takers = append(takers, w.PID)
+		}
+	}
+	return takers
 }
 
 func upsert(st *state.State, waiter state.Waiter) {

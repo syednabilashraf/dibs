@@ -206,6 +206,9 @@ func (v view) browser() Decision {
 			if r.Status == state.StatusFailed {
 				return deny("%s failed to start on your worktree. Check `docker logs %s` and fix it (often missing dependencies, which you can install inside the container), then run `dibs take %s` again to re-check it without recreating it. Or `dibs pass` to put it back on the baseline.", name, name, name)
 			}
+			if r.Status == state.StatusStarting {
+				return deny("%s runs your worktree but is not ready yet. Run `dibs take %s` again, which waits for it without recreating it, then retry.", name, name)
+			}
 			if mine.NoSwap {
 				continue
 			}

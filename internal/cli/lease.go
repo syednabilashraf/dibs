@@ -54,6 +54,7 @@ func runTake(e *env, args []string) int {
 		return e.errorf("%v", err)
 	}
 
+	before := a.heldNow(t)
 	var deadline time.Time
 	if *timeout > 0 {
 		deadline = time.Now().Add(*timeout)
@@ -100,19 +101,23 @@ func runTake(e *env, args []string) int {
 			}
 		}
 		if !deadline.IsZero() && time.Now().After(deadline) {
-			a.leave(t.Path)
+			a.giveBack(t, names, before)
 			a.store.Log(state.Event{Kind: "abandon", Resource: strings.Join(names, ","), Tree: t.Path, Label: t.Label, Detail: "gave up after " + fmtDuration(*timeout)})
 			e.printf("dibs: gave up after %s, so your place in line is gone. Run the take again without --timeout to wait until it is granted.\n", fmtDuration(*timeout))
 			return exitNo
 		}
 		select {
 		case <-ctx.Done():
-			a.leave(t.Path)
-			e.printf("dibs: stopped waiting\n")
+			if returned := a.giveBack(t, names, before); len(returned) > 0 {
+				e.printf("dibs: stopped waiting; %s had just been granted, and is given back untouched\n", strings.Join(returned, ", "))
+			} else {
+				e.printf("dibs: stopped waiting\n")
+			}
 			return exitNo
 		case <-time.After(time.Second):
 		}
 	}
+	defer a.settleTake(t)
 
 	a.store.Log(state.Event{Kind: "take", Resource: strings.Join(names, ","), Tree: t.Path, Label: t.Label})
 	expires := time.Now().Add(*lease)
@@ -124,8 +129,8 @@ func runTake(e *env, args []string) int {
 	}
 	sw, err := a.swapper(ctx, t.Path)
 	if err != nil {
-		a.release(t, names)
-		return e.errorf("%v (released %s)", err, strings.Join(names, ", "))
+		returned := a.giveBack(t, names, before)
+		return e.errorf("%v (gave back %s)", err, strings.Join(returned, ", "))
 	}
 	if *noSwap {
 		for _, name := range containers {
@@ -133,23 +138,39 @@ func runTake(e *env, args []string) int {
 		}
 		return exitOK
 	}
+	var failed, starting []string
 	for _, name := range containers {
+		if ctx.Err() != nil {
+			return a.stopTake(t, names, before, fmt.Errorf("stopped before %s was touched", name))
+		}
 		outcome, err := sw.Serve(ctx, name, t)
 		if outcome != nil {
 			a.report(outcome)
 		}
-		if err != nil {
-			if errors.Is(err, swap.ErrNotReady) {
-				e.errorf("%v", err)
-				e.printf("dibs: you still hold %s, so others wait until you pass or your lease ends. %s failed to start on your worktree: fix it (for example install the dependencies your branch needs inside the container), then run `dibs take %s` again, which re-checks it without recreating it. Or run `dibs pass`: a container that failed to start goes back on the baseline when passed.\n", strings.Join(names, ", "), name, strings.Join(positional, " "))
-				return exitError
-			}
-			a.release(t, names)
-			if errors.Is(err, swap.ErrInterrupted) {
-				return e.errorf("interrupted after %s was recreated; released %s", name, strings.Join(names, ", "))
-			}
-			return e.errorf("%v\ndibs: released %s", err, strings.Join(names, ", "))
+		switch {
+		case err == nil:
+		case errors.Is(err, swap.ErrInterrupted) || ctx.Err() != nil:
+			return a.stopTake(t, names, before, err)
+		case errors.Is(err, swap.ErrNotReady):
+			e.errorf("%v", err)
+			failed = append(failed, name)
+		case errors.Is(err, swap.ErrStillStarting):
+			e.errorf("%v", err)
+			starting = append(starting, name)
+		default:
+			returned := a.giveBack(t, names, before)
+			return e.errorf("%v\ndibs: gave back %s", err, strings.Join(returned, ", "))
 		}
+	}
+	if len(failed) > 0 || len(starting) > 0 {
+		e.printf("dibs: you still hold %s, so others wait until you pass or your lease ends.\n", strings.Join(names, ", "))
+		if len(failed) > 0 {
+			e.printf("dibs: %s failed to start on your worktree: fix it (for example install the dependencies your branch needs inside the container), then run `dibs take %s` again, which re-checks it without recreating it. Or run `dibs pass`: a container that failed to start goes back on the baseline when passed.\n", strings.Join(failed, ", "), strings.Join(failed, " "))
+		}
+		if len(starting) > 0 {
+			e.printf("dibs: %s is running your worktree but is not ready yet. It keeps starting on its own; run `dibs take %s` again in a while to re-check it without recreating it, and look at `docker logs` if it never gets there.\n", strings.Join(starting, ", "), strings.Join(starting, " "))
+		}
+		return exitError
 	}
 	a.warnIfBaseline(t)
 	e.printf("dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done testing.\n")
@@ -252,6 +273,73 @@ func (a *app) release(t *tree.Tree, names []string) {
 	if len(released) > 0 {
 		a.store.Log(state.Event{Kind: "pass", Resource: strings.Join(released, ","), Tree: t.Path, Label: t.Label})
 	}
+}
+
+func (a *app) setStatusIf(name, containerID string, from, to state.Status) {
+	a.store.Update(func(st *state.State) error {
+		if r := st.Lookup(name); r != nil && r.ContainerID == containerID && r.Status == from {
+			r.Status = to
+		}
+		return nil
+	})
+}
+
+func (a *app) heldNow(t *tree.Tree) map[string]bool {
+	held := map[string]bool{}
+	if st, err := a.store.Read(); err == nil {
+		for _, name := range st.HeldBy(t.Path, time.Now()) {
+			held[name] = true
+		}
+	}
+	return held
+}
+
+func (a *app) giveBack(t *tree.Tree, names []string, before map[string]bool) []string {
+	var returned []string
+	a.store.Update(func(st *state.State) error {
+		queue.Leave(st, t.Path)
+		acquired := []string{}
+		for _, name := range names {
+			if !before[name] {
+				acquired = append(acquired, name)
+			}
+		}
+		if len(acquired) > 0 {
+			returned = queue.Pass(st, t.Path, acquired, time.Now())
+		}
+		return nil
+	})
+	if len(returned) > 0 {
+		a.store.Log(state.Event{Kind: "pass", Resource: strings.Join(returned, ","), Tree: t.Path, Label: t.Label})
+	}
+	return returned
+}
+
+func (a *app) settleTake(t *tree.Tree) {
+	a.store.Update(func(st *state.State) error {
+		queue.Settle(st, t.Path, os.Getpid(), time.Now())
+		return nil
+	})
+}
+
+func (a *app) stopTake(t *tree.Tree, names []string, before map[string]bool, cause error) int {
+	returned := a.giveBack(t, names, before)
+	a.printf("dibs: take stopped: %v\n", cause)
+	if len(returned) > 0 {
+		a.printf("dibs: gave back %s. Containers already switched keep running your worktree until the next holder takes them; one that was still starting finishes on its own.\n", strings.Join(returned, ", "))
+	}
+	if len(returned) < len(names) {
+		kept := []string{}
+		for _, name := range names {
+			if before[name] {
+				kept = append(kept, name)
+			}
+		}
+		if len(kept) > 0 {
+			a.printf("dibs: you still hold %s, which you held before this take\n", strings.Join(kept, ", "))
+		}
+	}
+	return exitNo
 }
 
 func (a *app) describeWait(result queue.Result, now time.Time) string {
@@ -418,10 +506,6 @@ func runCheck(e *env, args []string) int {
 			problems = append(problems, fmt.Sprintf("%s: serving %s, not your worktree", name, servingText(r)))
 			continue
 		}
-		if r.Status != state.StatusReady {
-			problems = append(problems, fmt.Sprintf("%s: status %q, not ready", name, r.Status))
-			continue
-		}
 		if client == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			client, err = docker.New(ctx)
@@ -429,6 +513,21 @@ func runCheck(e *env, args []string) int {
 			if err != nil {
 				return e.errorf("%v", err)
 			}
+		}
+		if r.Status == state.StatusStarting || r.Status == state.StatusFailed {
+			sw := &swap.Swapper{Docker: client, Store: a.store, Config: a.cfg}
+			status, probeErr := sw.Probe(context.Background(), name, r.ContainerID)
+			if status == state.StatusReady {
+				a.setStatusIf(name, r.ContainerID, r.Status, status)
+				r.Status = status
+			} else if probeErr != nil {
+				problems = append(problems, fmt.Sprintf("%s: failed to start: %v", name, probeErr))
+				continue
+			}
+		}
+		if r.Status != state.StatusReady {
+			problems = append(problems, fmt.Sprintf("%s: %s, not ready yet", name, statusText(r)))
+			continue
 		}
 		raw, err := client.Inspect(context.Background(), name)
 		if errors.Is(err, docker.ErrNotFound) {
@@ -594,9 +693,21 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string) in
 			code = exitNo
 			continue
 		}
+		holder, ok := a.holdForRestore(name, caller)
+		if !ok {
+			a.printf("dibs: %s: skipped, someone in line is about to take it\n", name)
+			code = exitNo
+			continue
+		}
 		outcome, err := sw.Serve(ctx, name, nil)
 		if outcome != nil {
 			a.report(outcome)
+		}
+		if holder != "" {
+			a.store.Update(func(st *state.State) error {
+				queue.Pass(st, holder, []string{name}, time.Now())
+				return nil
+			})
 		}
 		if err != nil {
 			a.errorf("%v", err)
@@ -605,6 +716,33 @@ func (a *app) restore(ctx context.Context, caller *tree.Tree, names []string) in
 		}
 	}
 	return code
+}
+
+func (a *app) holdForRestore(name string, caller *tree.Tree) (string, bool) {
+	holder, label := "dibs-restore", "dibs restore"
+	if caller != nil {
+		holder, label = caller.Path, caller.Label
+	}
+	mine, granted := false, false
+	a.store.Update(func(st *state.State) error {
+		if h := st.Lookup(name).ActiveHolder(time.Now()); h != nil && h.Tree == holder {
+			mine = true
+			return nil
+		}
+		result, err := queue.Take(st, queue.Request{
+			Tree: holder, Label: label, Resources: []string{name},
+			Lease: a.cfg.ReadyTimeout.D() + 10*time.Minute, PID: os.Getpid(),
+		}, state.ProcessAlive)
+		granted = err == nil && result.Outcome == queue.Granted
+		return nil
+	})
+	switch {
+	case mine:
+		return "", true
+	case granted:
+		return holder, true
+	}
+	return "", false
 }
 
 func runGrab(e *env, args []string) int {

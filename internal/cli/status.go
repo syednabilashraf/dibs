@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/syednabilashraf/dibs/internal/state"
+	"github.com/syednabilashraf/dibs/internal/swap"
 )
 
 func runStatus(e *env, args []string) int {
@@ -29,6 +31,7 @@ func runStatus(e *env, args []string) int {
 	if err != nil {
 		return e.errorf("%v", err)
 	}
+	a.refreshStatuses(st)
 	now := time.Now()
 	recent, _ := a.store.Events(now.Add(-2 * time.Hour))
 	if *asJSON {
@@ -45,6 +48,28 @@ func runStatus(e *env, args []string) int {
 	}
 	writeStatus(e.stdout, st, recent, now, a.lastCall)
 	return exitOK
+}
+
+func (a *app) refreshStatuses(st *state.State) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var sw *swap.Swapper
+	for _, name := range st.Names() {
+		r := st.Resources[name]
+		if r.Virtual || r.ContainerID == "" || (r.Status != state.StatusStarting && r.Status != state.StatusFailed) {
+			continue
+		}
+		if sw == nil {
+			var err error
+			if sw, err = a.swapper(ctx, ""); err != nil {
+				return
+			}
+		}
+		if status, _ := sw.Probe(ctx, name, r.ContainerID); status != "" && status != r.Status {
+			a.setStatusIf(name, r.ContainerID, r.Status, status)
+			r.Status = status
+		}
+	}
 }
 
 func writeStatus(w io.Writer, st *state.State, recent []state.Event, now time.Time, lastCall func(*state.Holder) (time.Time, bool)) {

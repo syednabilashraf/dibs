@@ -188,49 +188,57 @@ func TestCLITakeFromBaselineWarns(t *testing.T) {
 	}
 }
 
+func (s *stack) rerun(t *testing.T, script string) {
+	t.Helper()
+	exec.Command("docker", "rm", "-f", s.container).Run()
+	sh(t, "docker", "run", "-d", "--name", s.container, "-v", filepath.Join(s.main, "web")+":/app:ro", "busybox:latest", "sh", "-c", script)
+}
+
+func writeStackConfig(t *testing.T, body string) {
+	t.Helper()
+	os.WriteFile(filepath.Join(os.Getenv("DIBS_HOME"), "config.yaml"), []byte("stop_timeout: 1s\nexec_grace: 0s\n"+body), 0o644)
+}
+
 func TestCLIFailedStartKeepsTheLeaseAndPassRestores(t *testing.T) {
 	s := newStack(t)
-	home := os.Getenv("DIBS_HOME")
-	broken := fmt.Sprintf(`
-stop_timeout: 1s
-exec_grace: 0s
-ready_timeout: 2s
-containers:
-  %s:
-    ready:
-      log: 'never printed'
-`, s.container)
-	os.WriteFile(filepath.Join(home, "config.yaml"), []byte(broken), 0o644)
+	s.rerun(t, "grep -q ticket-a /app/who && { echo 'cannot start on ticket-a'; exit 1; }; sleep 3600")
+	writeStackConfig(t, fmt.Sprintf("containers:\n  %s:\n    ready:\n      settle: 500ms\n", s.container))
 
 	code, out := dibs(t, "take", s.container, "--tree", s.a)
-	if code != exitError || !strings.Contains(out, "you still hold") || !strings.Contains(out, "not ready after") {
+	if code != exitError || !strings.Contains(out, "you still hold") || !strings.Contains(out, "exited during startup") || !strings.Contains(out, "cannot start on ticket-a") {
 		t.Fatalf("a failed start must keep the lease and explain how to recover: %d\n%s", code, out)
-	}
-	if got := s.serves(t); got != "ticket-a" {
-		t.Fatalf("the container stays on the worktree for the holder to fix, serves %q", got)
 	}
 	if code, out := dibs(t, "take", s.container, "--tree", s.b); code != exitNo || !strings.Contains(out, "held by ticket-a") {
 		t.Fatalf("others must queue rather than get the broken container: %d\n%s", code, out)
 	}
-	if code, _ := dibs(t, "check", "--tree", s.a); code != exitNo {
-		t.Fatal("check must fail while the container is not ready")
+	if code, out := dibs(t, "check", "--tree", s.a); code != exitNo || !strings.Contains(out, "failed to start") {
+		t.Fatalf("check must fail while the container is broken: %d\n%s", code, out)
 	}
-
-	healthy := fmt.Sprintf(`
-stop_timeout: 1s
-exec_grace: 0s
-containers:
-  %s:
-    ready:
-      settle: 500ms
-`, s.container)
-	os.WriteFile(filepath.Join(home, "config.yaml"), []byte(healthy), 0o644)
 	code, out = dibs(t, "pass", "--tree", s.a)
 	if code != exitOK || !strings.Contains(out, "goes back on the baseline") {
 		t.Fatalf("passing a failed container should restore it: %d\n%s", code, out)
 	}
 	if got := s.serves(t); got != "main" {
 		t.Fatalf("after pass the failed container must be back on the baseline, serves %q", got)
+	}
+}
+
+func TestCLISlowStartKeepsTheLeaseAndIsRechecked(t *testing.T) {
+	s := newStack(t)
+	writeStackConfig(t, fmt.Sprintf("containers:\n  %s:\n    ready:\n      log: 'never printed'\n      timeout: 2s\n", s.container))
+	code, out := dibs(t, "take", s.container, "--tree", s.a)
+	if code != exitError || !strings.Contains(out, "is running your worktree but is not ready yet") || !strings.Contains(out, "still starting after 2s") {
+		t.Fatalf("a slow start keeps the lease and says it is still starting: %d\n%s", code, out)
+	}
+	if got := s.serves(t); got != "ticket-a" {
+		t.Fatalf("it keeps the worktree, serves %q", got)
+	}
+	if code, out := dibs(t, "check", "--tree", s.a); code != exitNo || !strings.Contains(out, "starting, not ready yet") {
+		t.Fatalf("check must fail while it is starting: %d\n%s", code, out)
+	}
+	writeStackConfig(t, fmt.Sprintf("containers:\n  %s:\n    ready:\n      settle: 500ms\n", s.container))
+	if code, out := dibs(t, "check", "--tree", s.a); code != exitOK {
+		t.Fatalf("once it is ready, check re-checks and passes without a recreate: %d\n%s", code, out)
 	}
 }
 
