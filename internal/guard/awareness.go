@@ -107,7 +107,7 @@ func Primer(cfg *config.Config, st *state.State, caller *tree.Tree, tmpdir strin
 	if subagent {
 		b.WriteString("- You are a subagent. Leases belong to the worktree, so you share them with the session that started you when you work in the same worktree. If it already holds what you need (see below), use it without taking again. Never run `dibs pass` for anything you did not take yourself.\n")
 	}
-	b.WriteString("- To test your changes against a running container (browser QA, e2e, requests to its port), first run `dibs take <containers or group> --wait` as a background command and wait for it to finish. It recreates those containers with your worktree mounted. Include `browser` if you will drive a browser.")
+	b.WriteString("- To test your changes against a running container (browser QA, e2e, requests to its port), first run `dibs take <containers or group> --wait` as a background command and wait for it to finish. It recreates those containers with your worktree mounted. Include `browser` if you will drive a browser. To stop a take, run `dibs cancel` rather than killing it.")
 	if groups := groupSummary(cfg); groups != "" {
 		b.WriteString(" Groups: " + groups + ".")
 	}

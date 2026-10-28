@@ -42,6 +42,7 @@ func commands() []command {
 	return []command{
 		{"take", "take containers or virtual locks for this worktree (--wait to queue)", runTake},
 		{"pass", "give back what this worktree holds (--restore to put containers back to baseline)", runPass},
+		{"cancel", "stop this worktree's take wherever it is (in line or mid-swap) and give back what it got", runCancel},
 		{"check", "exit 0 if this worktree still holds its resources and the containers still serve it", runCheck},
 		{"renew", "extend this worktree's leases", runRenew},
 		{"hold", "keep this worktree's leases for a while without tool calls, for example while the user tests (--note says why)", runHold},
