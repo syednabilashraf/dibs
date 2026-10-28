@@ -18,6 +18,8 @@ import (
 	"github.com/syednabilashraf/dibs/internal/tree"
 )
 
+const idleNotice = 5 * time.Minute
+
 func contextWithSignals() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 }
@@ -77,7 +79,7 @@ func runTake(e *env, args []string) int {
 		if result.Outcome == queue.Granted {
 			break
 		}
-		message := describeWait(result)
+		message := a.describeWait(result, time.Now())
 		if !*wait {
 			e.printf("dibs: not granted: %s\n", message)
 			e.printf("dibs: run `dibs take %s --wait` in the background to queue\n", strings.Join(positional, " "))
@@ -111,7 +113,7 @@ func runTake(e *env, args []string) int {
 	}
 	sw, err := a.swapper(ctx, t.Path)
 	if err != nil {
-		a.release(t.Path, names)
+		a.release(t, names)
 		return e.errorf("%v (released %s)", err, strings.Join(names, ", "))
 	}
 	if *noSwap {
@@ -131,7 +133,7 @@ func runTake(e *env, args []string) int {
 				e.printf("dibs: you still hold %s, so others wait until you pass or your lease ends. %s failed to start on your worktree: fix it (for example install the dependencies your branch needs inside the container), then run `dibs take %s` again, which re-checks it without recreating it. Or run `dibs pass`: a container that failed to start goes back on the baseline when passed.\n", strings.Join(names, ", "), name, strings.Join(positional, " "))
 				return exitError
 			}
-			a.release(t.Path, names)
+			a.release(t, names)
 			if errors.Is(err, swap.ErrInterrupted) {
 				return e.errorf("interrupted after %s was recreated; released %s", name, strings.Join(names, ", "))
 			}
@@ -194,13 +196,33 @@ func (a *app) describe(ctx context.Context, sw *swap.Swapper, name string) {
 }
 
 func (a *app) prune(st *state.State) {
-	expired, dropped := queue.Prune(st, time.Now(), state.ProcessAlive)
+	now := time.Now()
+	expired, dropped := queue.Prune(st, now, state.ProcessAlive)
 	for _, x := range expired {
 		a.store.Log(state.Event{Kind: "expire", Resource: x.Resource, Tree: x.Holder.Tree, Label: x.Holder.Label})
 	}
 	for _, w := range dropped {
 		a.store.Log(state.Event{Kind: "abandon", Resource: strings.Join(w.Resources, ","), Tree: w.Tree, Label: w.Label})
 	}
+	idle := queue.ReleaseIdle(st, now, queue.IdlePolicy{Limit: a.cfg.IdleRelease.D(), LastActive: a.store.LastActive, Alive: state.ProcessAlive})
+	for _, x := range idle {
+		a.store.Log(state.Event{Kind: "idle", Resource: x.Resource, Tree: x.Holder.Tree, Label: x.Holder.Label, Detail: idleDetail(x)})
+	}
+}
+
+func idleDetail(x queue.Idle) string {
+	labels := []string{}
+	for _, w := range x.Waiters {
+		labels = append(labels, w.Label)
+	}
+	return fmt.Sprintf("no tool calls since %s while %s waited", clock(x.Since), strings.Join(labels, ", "))
+}
+
+func (a *app) lastCall(h *state.Holder) (time.Time, bool) {
+	if h == nil || h.Kind != state.KindSession {
+		return time.Time{}, false
+	}
+	return queue.IdleSince(h, a.store.LastActive(h.Tree))
 }
 
 func (a *app) leave(treePath string) {
@@ -210,19 +232,33 @@ func (a *app) leave(treePath string) {
 	})
 }
 
-func (a *app) release(treePath string, names []string) {
+func (a *app) release(t *tree.Tree, names []string) {
+	var released []string
 	a.store.Update(func(st *state.State) error {
-		queue.Pass(st, treePath, names, time.Now())
+		released = queue.Pass(st, t.Path, names, time.Now())
 		return nil
 	})
+	if len(released) > 0 {
+		a.store.Log(state.Event{Kind: "pass", Resource: strings.Join(released, ","), Tree: t.Path, Label: t.Label})
+	}
 }
 
-func describeWait(result queue.Result) string {
+func (a *app) describeWait(result queue.Result, now time.Time) string {
 	parts := []string{}
 	for _, b := range result.Blockers {
 		part := fmt.Sprintf("%s held by %s since %s", b.Resource, holderText(&b.Holder), clock(b.Holder.Since))
-		if !b.Holder.Pinned() && !b.Holder.Expires.IsZero() {
-			part += fmt.Sprintf(" (lease ends %s)", clock(b.Holder.Expires))
+		switch {
+		case b.Holder.OnHold():
+			part += fmt.Sprintf(" (held until %s)", clock(b.Holder.Expires))
+		case !b.Holder.Pinned() && !b.Holder.Expires.IsZero():
+			detail := "lease ends " + clock(b.Holder.Expires)
+			if since, ok := a.lastCall(&b.Holder); ok && now.Sub(since) >= idleNotice {
+				detail += fmt.Sprintf("; no tool calls since %s", clock(since))
+				if limit := a.cfg.IdleRelease.D(); limit > 0 {
+					detail += fmt.Sprintf(", released at %s if that lasts", clock(since.Add(limit)))
+				}
+			}
+			part += " (" + detail + ")"
 		}
 		parts = append(parts, part)
 	}
@@ -414,6 +450,53 @@ func runRenew(e *env, args []string) int {
 		return exitNo
 	}
 	e.printf("dibs: renewed %s until %s\n", strings.Join(renewed, ", "), clock(time.Now().Add(*lease)))
+	return exitOK
+}
+
+func runHold(e *env, args []string) int {
+	a, err := e.app()
+	if err != nil {
+		return e.errorf("%v", err)
+	}
+	fs := newFlags(e, "hold", "--note TEXT [--for 30m] [--tree DIR]")
+	length := fs.Duration("for", a.cfg.Hold.D(), fmt.Sprintf("how long to keep the leases without tool calls (at most %s in a row)", fmtDuration(a.cfg.HoldMax.D())))
+	noteFlag := fs.String("note", "", "why, shown to everyone waiting (required)")
+	treeFlag := fs.String("tree", "", "worktree to act for (default: current directory)")
+	if _, err := parse(fs, args); err != nil {
+		return exitError
+	}
+	note := strings.TrimSpace(*noteFlag)
+	if note == "" {
+		fs.Usage()
+		return e.errorf("say why with --note; everyone waiting sees it")
+	}
+	if *length <= 0 {
+		return e.errorf("--for must be positive")
+	}
+	t, err := resolveTree(*treeFlag)
+	if err != nil {
+		return e.errorf("%v", err)
+	}
+	var held queue.Held
+	if err := a.store.Update(func(st *state.State) error {
+		a.prune(st)
+		held = queue.Hold(st, t.Path, note, *length, a.cfg.HoldMax.D(), time.Now())
+		return nil
+	}); err != nil {
+		return e.errorf("%v", err)
+	}
+	if len(held.AtLimit) > 0 {
+		e.printf("dibs: %s already held for the longest allowed (%s); it ends when its lease does. Pass it, or take it again once you are testing.\n", strings.Join(held.AtLimit, ", "), fmtDuration(a.cfg.HoldMax.D()))
+	}
+	if len(held.Resources) == 0 {
+		if len(held.AtLimit) == 0 {
+			e.printf("dibs: %s holds no leases\n", t.Label)
+		}
+		return exitNo
+	}
+	a.store.Log(state.Event{Kind: "hold", Resource: strings.Join(held.Resources, ","), Tree: t.Path, Label: t.Label, Detail: note})
+	e.printf("dibs: holding %s until %s; everyone waiting sees: %s\n", strings.Join(held.Resources, ", "), clock(held.Until), note)
+	e.printf("dibs: run `dibs pass` as soon as it is no longer needed. Holds last at most %s in a row; the lease ends when the hold does.\n", fmtDuration(a.cfg.HoldMax.D()))
 	return exitOK
 }
 
