@@ -27,6 +27,7 @@ type Request struct {
 	Lease     time.Duration
 	PID       int
 	NoSwap    bool
+	Serve     string
 	Enqueue   bool
 	Now       time.Time
 }
@@ -89,14 +90,14 @@ func Take(st *state.State, req Request, alive Alive) (Result, error) {
 	Prune(st, now, alive)
 
 	if holdsAll(st, req.Tree, req.Resources, now) {
-		grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, req.PID, now)
+		grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, req.Serve, req.PID, now)
 		Leave(st, req.Tree)
 		return Result{Outcome: Granted}, nil
 	}
 
 	if !req.Enqueue {
 		if canGrant(st, req.Tree, req.Resources, now) && !reservedAgainst(st, req.Tree, req.Resources, len(st.Queue), now) {
-			grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, req.PID, now)
+			grant(st, req.Tree, req.Label, req.Resources, req.Lease, req.NoSwap, req.Serve, req.PID, now)
 			return Result{Outcome: Granted}, nil
 		}
 		return describe(st, req.Tree, req.Resources, now), nil
@@ -110,6 +111,7 @@ func Take(st *state.State, req Request, alive Alive) (Result, error) {
 		PID:       req.PID,
 		Lease:     req.Lease,
 		NoSwap:    req.NoSwap,
+		Serve:     req.Serve,
 		Since:     now,
 	})
 	if deadlocked(st, req.Tree, now) {
@@ -137,7 +139,7 @@ func Schedule(st *state.State, now time.Time) []state.Waiter {
 			return granted
 		}
 		w := st.Queue[next]
-		grant(st, w.Tree, w.Label, w.Resources, w.Lease, w.NoSwap, w.PID, now)
+		grant(st, w.Tree, w.Label, w.Resources, w.Lease, w.NoSwap, w.Serve, w.PID, now)
 		granted = append(granted, w)
 		st.Queue = append(st.Queue[:next:next], st.Queue[next+1:]...)
 	}
@@ -439,7 +441,7 @@ func canGrant(st *state.State, tree string, resources []string, now time.Time) b
 	return true
 }
 
-func grant(st *state.State, tree, label string, resources []string, lease time.Duration, noSwap bool, taker int, now time.Time) {
+func grant(st *state.State, tree, label string, resources []string, lease time.Duration, noSwap bool, serve string, taker int, now time.Time) {
 	for _, name := range resources {
 		r := st.Get(name)
 		if h := r.ActiveHolder(now); h != nil && h.Tree == tree {
@@ -448,6 +450,7 @@ func grant(st *state.State, tree, label string, resources []string, lease time.D
 				h.NoSwap = noSwap
 				h.HoldSince, h.Note = time.Time{}, ""
 				h.Taker = taker
+				h.Serve = serve
 			}
 			continue
 		}
@@ -458,6 +461,7 @@ func grant(st *state.State, tree, label string, resources []string, lease time.D
 			Since:   now,
 			Expires: now.Add(lease),
 			NoSwap:  noSwap,
+			Serve:   serve,
 			Taker:   taker,
 		}
 	}

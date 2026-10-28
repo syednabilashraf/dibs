@@ -499,3 +499,16 @@ func TestATakerWaitsForAContainerThatIsStillStarting(t *testing.T) {
 	st.Resources["web"].Status = state.StatusReady
 	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), false, "")
 }
+
+func TestBrowserWithARefCheckout(t *testing.T) {
+	w := newWorld(t)
+	st := w.aHoldsEverything()
+	checkout := "/home/dev/.dibs/refs/app-a-1234"
+	for _, name := range []string{"browser", "web"} {
+		st.Resources[name].Holder.Serve = checkout
+	}
+	expect(t, Decide(w.cfg, st, w.a, browserCall(), now, alive), true, "has not finished switching it to the checkout you asked for with --ref")
+	st.Resources["web"].Serving, st.Resources["web"].ServingLabel = checkout, "main at 1234567"
+	expect(t, Decide(w.cfg, st, w.a, browserCall(), now, alive), false, "")
+	expect(t, Decide(w.cfg, st, w.b, browserCall(), now, alive), true, "browser is in use by ticket-a")
+}

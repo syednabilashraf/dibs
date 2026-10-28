@@ -202,6 +202,9 @@ func (v view) holdsAnything() bool {
 }
 
 func (v view) servesMe(r *state.Resource) bool {
+	if h := v.mine(r); h != nil && h.Serve != "" {
+		return r.Serving == h.Serve
+	}
 	if r.Serving == v.self {
 		return true
 	}
@@ -236,7 +239,11 @@ func (v view) mineReady(what string) Decision {
 	case len(starting) > 0:
 		return deny("%s runs your worktree but is not ready yet. Run `dibs take %s` again, which waits for it without recreating it, then retry.", strings.Join(starting, ", "), strings.Join(starting, " "))
 	case len(switching) > 0:
-		return deny("you hold %s, but your `dibs take` has not finished switching %s to your worktree, so %s would still show other code there. Wait for the take to finish, then retry.", strings.Join(switching, ", "), pronoun(switching), what)
+		destination := "your worktree"
+		if h := v.mine(v.st.Resources[switching[0]]); h != nil && h.Serve != "" {
+			destination = "the checkout you asked for with --ref"
+		}
+		return deny("you hold %s, but your `dibs take` has not finished switching %s to %s, so %s would still show other code there. Wait for the take to finish, then retry.", strings.Join(switching, ", "), pronoun(switching), destination, what)
 	}
 	return allow()
 }
