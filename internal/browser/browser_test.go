@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -90,5 +92,38 @@ func TestArgs(t *testing.T) {
 	launch := LaunchArgs(opts)
 	if launch[0] != "--remote-debugging-port=9333" || launch[1] != "--user-data-dir=/p" {
 		t.Fatalf("LaunchArgs = %v", launch)
+	}
+}
+
+func TestEnsureLaunchesARealChromeOutsideTheCallersProcessTree(t *testing.T) {
+	if os.Getenv("DIBS_CHROME_INTEGRATION") == "" {
+		t.Skip("set DIBS_CHROME_INTEGRATION=1 to launch a real Chrome")
+	}
+	chrome, err := Detect()
+	if err != nil {
+		t.Skip(err)
+	}
+	opts := Options{Port: freePort(t), Profile: filepath.Join(t.TempDir(), "profile"), Chrome: chrome, StateDir: t.TempDir()}
+	if err := Ensure(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	pid := ProfileOwner(opts.Profile)
+	t.Cleanup(func() {
+		if pid > 0 {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	if pid == 0 {
+		t.Fatal("the launched Chrome should own its profile")
+	}
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appBundle(chrome) != "" && strings.TrimSpace(string(out)) != "1" {
+		t.Fatalf("Chrome should be started by launchd, not by the caller: ppid %s", out)
+	}
+	if !Ready(context.Background(), opts.Port) {
+		t.Fatal("the debugging port should answer")
 	}
 }
