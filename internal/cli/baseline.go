@@ -418,8 +418,7 @@ func (a *app) restorePreflight(ctx context.Context, st *state.State, name, root 
 		}
 		return true
 	}
-	rev, _ := baseline.Resolve(ctx, root, "HEAD")
-	result := preflight.Run(ctx, check, preflight.Target{Container: name, Tree: root, Rev: rev, Action: preflight.Restore})
+	result, _ := a.checkMigrations(ctx, name, root, preflight.Restore)
 	if result.Passed {
 		return true
 	}
@@ -429,6 +428,15 @@ func (a *app) restorePreflight(ctx context.Context, st *state.State, name, root 
 	}
 	a.printf("dibs: to restore it anyway, run `dibs restore %s --allow-migrations`\n", name)
 	return false
+}
+
+func (a *app) checkMigrations(ctx context.Context, name, dir, action string) (preflight.Result, bool) {
+	check := a.cfg.ContainerConfig(name).Migrations.Check
+	if check == "" {
+		return preflight.Result{Container: name, Passed: true}, false
+	}
+	rev, _ := baseline.Resolve(ctx, dir, "HEAD")
+	return preflight.Run(ctx, check, preflight.Target{Container: name, Tree: dir, Rev: rev, Action: action}), true
 }
 
 func (a *app) autoSync(ctx context.Context, st *state.State, root string, done map[string]bool) {

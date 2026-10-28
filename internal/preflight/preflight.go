@@ -15,6 +15,7 @@ const (
 	Take    = "take"
 	Restore = "restore"
 	Sync    = "sync"
+	Refresh = "refresh"
 )
 
 var Timeout = 2 * time.Minute
