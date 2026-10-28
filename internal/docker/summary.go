@@ -13,9 +13,12 @@ type Summary struct {
 	Name           string
 	Image          string
 	Running        bool
+	Restarting     bool
+	RestartCount   int
 	Status         string
 	Health         string
 	HasHealthcheck bool
+	Healthcheck    []string
 	Tty            bool
 	StartedAt      time.Time
 	Labels         map[string]string
@@ -27,13 +30,15 @@ func (s Summary) Label(key string) string { return s.Labels[key] }
 
 func Summarize(raw map[string]any) Summary {
 	var view struct {
-		ID    string `json:"Id"`
-		Name  string `json:"Name"`
-		State struct {
-			Running   bool   `json:"Running"`
-			Status    string `json:"Status"`
-			StartedAt string `json:"StartedAt"`
-			Health    *struct {
+		ID           string `json:"Id"`
+		Name         string `json:"Name"`
+		RestartCount int    `json:"RestartCount"`
+		State        struct {
+			Running    bool   `json:"Running"`
+			Restarting bool   `json:"Restarting"`
+			Status     string `json:"Status"`
+			StartedAt  string `json:"StartedAt"`
+			Health     *struct {
 				Status string `json:"Status"`
 			} `json:"Health"`
 		} `json:"State"`
@@ -56,14 +61,16 @@ func Summarize(raw map[string]any) Summary {
 	json.Unmarshal(data, &view)
 
 	s := Summary{
-		ID:      view.ID,
-		Name:    strings.TrimPrefix(view.Name, "/"),
-		Image:   view.Config.Image,
-		Running: view.State.Running,
-		Status:  view.State.Status,
-		Tty:     view.Config.Tty,
-		Labels:  view.Config.Labels,
-		ExecIDs: view.ExecIDs,
+		ID:           view.ID,
+		Name:         strings.TrimPrefix(view.Name, "/"),
+		Image:        view.Config.Image,
+		Running:      view.State.Running,
+		Restarting:   view.State.Restarting,
+		RestartCount: view.RestartCount,
+		Status:       view.State.Status,
+		Tty:          view.Config.Tty,
+		Labels:       view.Config.Labels,
+		ExecIDs:      view.ExecIDs,
 	}
 	if s.Labels == nil {
 		s.Labels = map[string]string{}
@@ -76,6 +83,7 @@ func Summarize(raw map[string]any) Summary {
 	}
 	if hc := view.Config.Healthcheck; hc != nil && len(hc.Test) > 0 && hc.Test[0] != "NONE" {
 		s.HasHealthcheck = true
+		s.Healthcheck = hc.Test
 	}
 	seen := map[int]bool{}
 	for _, bindings := range view.HostConfig.PortBindings {
@@ -88,4 +96,17 @@ func Summarize(raw map[string]any) Summary {
 	}
 	sort.Ints(s.HostPorts)
 	return s
+}
+
+func (s Summary) IsHealthcheck(command string) bool {
+	if len(s.Healthcheck) < 2 {
+		return false
+	}
+	switch s.Healthcheck[0] {
+	case "CMD-SHELL":
+		return strings.HasSuffix(command, s.Healthcheck[1]) && strings.Contains(command, " -c ")
+	case "CMD":
+		return command == strings.Join(s.Healthcheck[1:], " ")
+	}
+	return false
 }

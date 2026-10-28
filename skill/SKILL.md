@@ -49,6 +49,8 @@ If `dibs take` says your worktree is the baseline checkout, you are in the wrong
 
 Without `--wait`, `dibs take` answers immediately: exit 0 means granted, exit 2 means someone else has it. Tell the user who, rather than proceeding.
 
+To stop a take you no longer want, in line or already swapping, run `dibs cancel`. Do not kill the background command instead: the shell gives it about a second, which may not be enough to finish recreating a container.
+
 ## Which resources
 
 - `browser`: whenever you will use browser automation. There is one shared Chrome, and every session sees every tab: act only on tabs you opened, and close them when done.
@@ -61,7 +63,9 @@ Databases and other stateful services are not swapped: every worktree uses the s
 
 ## When a container fails to start on your worktree
 
-If `dibs take` says a container is not ready, you still hold it: others wait until you pass or your lease ends. Read its logs (`docker logs <container>`). A common cause is a branch that needs newer dependencies than the container's image has; you may install them inside the container you hold. Then run `dibs take <container>` again, which re-checks it without recreating it. If you give up, `dibs pass`: a container that failed to start goes back on the baseline when passed.
+If `dibs take` says a container is still starting, it is running your worktree but has not passed its readiness check within its timeout (a slow build, say). You still hold it. Run `dibs take <container>` again later, which re-checks it without recreating it, and only test once it is ready.
+
+If `dibs take` says a container failed to start (it exited, keeps crashing, or logged a failure), you still hold it: others wait until you pass or your lease ends. Read its logs (`docker logs <container>`). A common cause is a branch that needs newer dependencies than the container's image has; you may install them inside the container you hold. Then run `dibs take <container>` again, which re-checks it without recreating it. If you give up, `dibs pass`: a container that failed to start goes back on the baseline when passed.
 
 If a take warns that the original container had changes outside its volumes (for example packages installed at runtime), those are gone once it is recreated. If the code the container runs needed them, it may fail to start; tell the user, since the real fix is usually rebuilding the image.
 
@@ -133,6 +137,7 @@ These are facts about the shared environment. Act on them before interpreting te
 | `dibs take <res\|group>... --wait` | Queue, take all at once, recreate containers on your worktree. Run in the background. |
 | `dibs check` | Exit 0 if you still hold everything and the containers still serve you. Exit 2 otherwise. |
 | `dibs pass` | Give everything back. The containers keep your code until the next holder takes them. |
+| `dibs cancel` | Stop your take, in line or mid-swap, and give back what it got. |
 | `dibs renew` | Extend your leases. |
 | `dibs hold --for <time> --note <why>` | Keep your leases without tool calls for a while (the user is testing, or you wait for the user). |
 | `dibs status` | Holders, what each container runs, the queue, recent swaps. |

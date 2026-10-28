@@ -17,6 +17,7 @@ type Status string
 const (
 	StatusReady    Status = "ready"
 	StatusSwapping Status = "swapping"
+	StatusStarting Status = "starting"
 	StatusFailed   Status = "failed"
 )
 
@@ -29,6 +30,7 @@ type Holder struct {
 	Note      string    `json:"note,omitempty"`
 	NoSwap    bool      `json:"no_swap,omitempty"`
 	HoldSince time.Time `json:"hold_since,omitempty"`
+	Taker     int       `json:"taker,omitempty"`
 }
 
 func (h *Holder) Pinned() bool { return h != nil && h.Kind == KindManual }

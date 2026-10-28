@@ -34,7 +34,8 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
   - its Docker healthcheck passes; or
   - the configured log line, HTTP or TCP probes pass; or
   - it has been running for a few seconds.
-- **Failed starts.** If a container does not become ready, the taker keeps the lease, so nobody else silently gets a broken container, and is told how to recover: fix it in place and take again (no recreate), or pass. Passing a container that failed to start puts it back on the baseline.
+- **Failed and slow starts.** A container that exits during startup, keeps crashing (restarted 3 times while dibs waits), or logs the configured failure pattern has failed, and dibs says so at once instead of waiting out the timeout. One that is still running but not ready when its timeout passes is *starting*, not failed: it keeps going, and `dibs take` again, `dibs check` and `dibs status` re-check it. Either way the taker keeps the lease, so nobody else silently gets a broken container, and the take still switches the rest of its containers. Passing a container that failed to start puts it back on the baseline.
+- **Stopping a take.** `dibs cancel` stops the worktree's take wherever it is. In line, it leaves the line. Mid-swap, the take finishes the recreate it is in (a container is never left half-recreated), stops waiting for readiness, and gives back everything it acquired; containers already switched keep running the worktree like after a pass. Killing a background take does the same as far as it can in the second or so the shell allows, so `dibs cancel` is the safe way. `dibs restore` holds the container while it works, so no take can recreate it at the same time.
 - **Dropped changes.** The first time dibs recreates a container it did not create, it lists files changed inside it outside volumes (packages installed at runtime, say) and warns that the recreate drops them, since the baseline snapshot cannot capture them.
 - **Checking.** `dibs check` confirms you still hold everything and that each live container is still the one dibs created for your worktree. It catches expired leases, human takeovers and containers recreated behind dibs' back.
 
@@ -107,6 +108,9 @@ containers:
       http: 'http://localhost:3000/' # any response below 500
       tcp: 'localhost:3000'
       settle: 3s                     # used when there is no healthcheck and no probe
+      fail: 'Failed to compile'      # regex over its logs that means it will not get ready
+      timeout: 15m                   # this container's readiness timeout (default ready_timeout)
+      max_restarts: 3                # restarts while waiting that count as a crash loop
 
 guard:
   browser_tools: [mcp__chrome-devtools__, mcp__playwright__]
@@ -131,6 +135,7 @@ browser:
 | --- | --- |
 | `dibs take <res\|group>... [--wait] [--timeout] [--lease] [--no-swap] [--tree DIR]` | take and swap |
 | `dibs pass [res...] [--restore]` | give back |
+| `dibs cancel` | stop this worktree's take, in line or mid-swap, and give back what it got |
 | `dibs check [res...]` | exit 0 if still yours and still serving you |
 | `dibs renew [--lease]` | extend leases |
 | `dibs hold --note TEXT [--for 30m]` | keep leases without tool calls for a while, shown to waiters |

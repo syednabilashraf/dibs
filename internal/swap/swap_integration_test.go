@@ -281,17 +281,86 @@ func TestIntegrationRollbackOnFailedCreate(t *testing.T) {
 	}
 }
 
-func TestIntegrationReadinessFailureMarksFailed(t *testing.T) {
+func (r *rig) restartWith(t *testing.T, script string, extra ...string) {
+	t.Helper()
+	exec.Command("docker", "rm", "-f", "-v", r.container).Run()
+	args := []string{"run", "-d", "--name", r.container, "--network", r.network,
+		"-v", filepath.Join(r.main.Path, "web") + ":/app:ro"}
+	args = append(append(args, extra...), testImage, "sh", "-c", script)
+	run(t, "docker", args...)
+	os.Remove(r.swapper.baselinePath(r.container))
+}
+
+func (r *rig) status(t *testing.T) state.Status {
+	t.Helper()
+	st, _ := r.swapper.Store.Read()
+	return st.Lookup(r.container).Status
+}
+
+func TestIntegrationAliveButNotReadyIsStarting(t *testing.T) {
+	r := newRig(t)
+	r.restartWith(t, `if grep -q feature /app/version.txt; then sleep 4; echo ready now; fi; sleep 3600`)
+	r.swapper.Config.Containers[r.container] = config.Container{Ready: config.Ready{Log: "ready now", Timeout: config.Duration(time.Second)}}
+	_, err := r.swapper.Serve(context.Background(), r.container, r.feature)
+	if !errors.Is(err, ErrStillStarting) || !strings.Contains(err.Error(), `has not matched "ready now"`) {
+		t.Fatalf("a container that is alive but slow is still starting, not failed: %v", err)
+	}
+	if got := r.status(t); got != state.StatusStarting {
+		t.Fatalf("status = %s", got)
+	}
+	id := r.inspect(t).ID
+	time.Sleep(5 * time.Second)
+	if status, err := r.swapper.Probe(context.Background(), r.container, id); status != state.StatusReady || err != nil {
+		t.Fatalf("once its log line appears, a re-check finds it ready: %s %v", status, err)
+	}
+}
+
+func TestIntegrationCrashLoopFailsFast(t *testing.T) {
+	r := newRig(t)
+	r.restartWith(t, `grep -q feature /app/version.txt && { echo "cannot boot on this branch"; exit 1; }; sleep 3600`, "--restart", "always")
+	r.swapper.Config.Containers[r.container] = config.Container{Ready: config.Ready{Log: "never printed"}}
+	start := time.Now()
+	_, err := r.swapper.Serve(context.Background(), r.container, r.feature)
+	if !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), "keeps crashing") || !strings.Contains(err.Error(), "cannot boot on this branch") {
+		t.Fatalf("a crash loop must fail with its output: %v", err)
+	}
+	if time.Since(start) > time.Minute {
+		t.Fatalf("a crash loop should be caught long before the readiness timeout: %s", time.Since(start))
+	}
+	if got := r.status(t); got != state.StatusFailed {
+		t.Fatalf("status = %s", got)
+	}
+}
+
+func TestIntegrationFailurePatternFailsFast(t *testing.T) {
+	r := newRig(t)
+	r.restartWith(t, `grep -q feature /app/version.txt && echo "Failed to compile: missing module"; sleep 3600`)
+	r.swapper.Config.Containers[r.container] = config.Container{Ready: config.Ready{Log: "compiled successfully", Fail: "Failed to compile"}}
+	_, err := r.swapper.Serve(context.Background(), r.container, r.feature)
+	if !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), `"Failed to compile"`) {
+		t.Fatalf("the failure pattern should end the wait: %v", err)
+	}
+}
+
+func TestIntegrationStoppedWhileStartingIsNotFailed(t *testing.T) {
 	r := newRig(t)
 	r.swapper.Config.Containers[r.container] = config.Container{Ready: config.Ready{Log: "never printed"}}
-	r.swapper.Config.ReadyTimeout = config.Duration(2 * time.Second)
-	_, err := r.swapper.Serve(context.Background(), r.container, r.feature)
-	if !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), "not ready after") {
-		t.Fatalf("expected a readiness failure, got %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for !strings.Contains(r.log.String(), "waiting for it to become ready") {
+			time.Sleep(50 * time.Millisecond)
+		}
+		cancel()
+	}()
+	_, err := r.swapper.Serve(ctx, r.container, r.feature)
+	if !errors.Is(err, ErrInterrupted) || !strings.Contains(err.Error(), "keeps starting on its own") {
+		t.Fatalf("a stopped take is interrupted, not failed: %v", err)
 	}
-	st, _ := r.swapper.Store.Read()
-	if st.Lookup(r.container).Status != state.StatusFailed {
-		t.Fatalf("status should be failed: %+v", st.Lookup(r.container))
+	if got := r.status(t); got != state.StatusStarting {
+		t.Fatalf("status = %s, want starting", got)
+	}
+	if got := r.exec(t, "cat /app/version.txt"); got != "feature" {
+		t.Fatalf("the recreated container keeps serving the worktree: %q", got)
 	}
 }
 

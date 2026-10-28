@@ -96,3 +96,20 @@ func TestLiveDaemon(t *testing.T) {
 		t.Fatalf("missing container should be ErrNotFound, got %v", err)
 	}
 }
+
+func TestHealthcheckExecsAreRecognised(t *testing.T) {
+	shell := Summary{Healthcheck: []string{"CMD-SHELL", "curl -f http://localhost:8114/status"}}
+	if !shell.IsHealthcheck("/bin/sh -c curl -f http://localhost:8114/status") {
+		t.Fatal("a CMD-SHELL healthcheck runs through sh -c")
+	}
+	if shell.IsHealthcheck("pytest -q") || shell.IsHealthcheck("curl -f http://localhost:8114/status") {
+		t.Fatal("only the healthcheck itself matches")
+	}
+	direct := Summary{Healthcheck: []string{"CMD", "pg_isready", "-U", "app"}}
+	if !direct.IsHealthcheck("pg_isready -U app") || direct.IsHealthcheck("pg_isready") {
+		t.Fatal("a CMD healthcheck matches its exact arguments")
+	}
+	if (Summary{}).IsHealthcheck("anything") {
+		t.Fatal("no healthcheck, no match")
+	}
+}
