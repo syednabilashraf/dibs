@@ -59,6 +59,12 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
 - **Activity.** The hooks record when each worktree last made a tool call. `dibs status` shows it for every holder, and waiters see when a holder went quiet.
 - **Skill.** `dibs claude-setup` installs a skill with the full protocol.
 - **Shared browser.** `dibs browser-mcp` runs chrome-devtools-mcp against a single Chrome with remote debugging, launching it on first use. Every session gets browser tools and one login, instead of the second session failing on a locked profile.
+  - On macOS Chrome is started through LaunchServices, so it is not a child of the terminal that launched it, and the system's memory accounting (including the "out of application memory" dialog) shows its own usage instead of lumping in the terminal's processes.
+  - It runs with session restore, so session cookies, and with them most logins, survive a relaunch.
+  - If it has died, the next browser tool call relaunches it, and chrome-devtools-mcp reconnects on its own.
+  - A session that takes `browser` from someone else starts with one blank tab: tabs left by earlier holders are closed. Opening more than `browser.max_tabs` tabs is refused until some are closed.
+  - The browser shares the Dock icon of your own Chrome when both are Google Chrome. To keep them apart, point `browser.chrome` at a separate build such as Chrome for Testing, with its own profile.
+  - The default `mcp_command` runs through `npx`, which keeps an npm process alive next to every session's server. With many sessions, install chrome-devtools-mcp once and set `mcp_command: [chrome-devtools-mcp]`.
 
 ### Unit tests without a lease
 
@@ -146,6 +152,8 @@ browser:
   profile: ~/.cache/dibs/chrome-profile   # any dedicated profile; keep it logged in
   chrome: ''                              # auto-detected
   mcp_command: [npx, -y, chrome-devtools-mcp@latest]
+  tools: [mcp__chrome-devtools__]         # tool name prefixes that drive this browser
+  max_tabs: 6                             # most open tabs; 0: no limit
 ```
 
 ### Migration checks
