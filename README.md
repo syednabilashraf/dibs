@@ -28,6 +28,7 @@ dibs: ready. Run `dibs check` after each test batch and `dibs pass` when done te
   - To keep containers without tool calls on purpose (the user is testing, or the session is waiting for the user), `dibs hold --note '<why>'` puts the leases on hold for a bounded time and shows the reason to everyone waiting.
   - Waiters that die are dropped from the line.
   - Humans can `grab` a resource, which pins it until they `drop` it.
+- **Another ref.** `dibs take <res>... --ref origin/main` serves a dibs-managed checkout of that ref instead of the worktree, for "before" screenshots without switching the worktree's branch. Each worktree gets one such checkout under `~/.dibs/refs`, reused and moved to whatever ref is asked for next; `--patch FILE` applies local patches to it (a feature flag the "before" view needs, say). Taking again without `--ref` switches the containers back. Checkouts whose worktree is gone are removed.
 - **Lazy handoff.** `dibs pass` does not restart anything. The container keeps the last holder's code until the next take, so each handoff costs one restart and re-taking your own worktree costs none.
 - **Polite swaps.** Before recreating a container, dibs waits up to 5 minutes for `docker exec` commands running in it, which are usually another session's unit tests, and prints what it is waiting on.
 - **Readiness.** A take returns once each container is ready:
@@ -185,7 +186,7 @@ Exit 0 means starting the container on that checkout is safe. Anything else mean
 
 | Command | |
 | --- | --- |
-| `dibs take <res\|group>... [--wait] [--timeout] [--lease] [--no-swap] [--allow-migrations] [--tree DIR]` | take and swap |
+| `dibs take <res\|group>... [--wait] [--timeout] [--lease] [--no-swap] [--allow-migrations] [--ref REF [--patch FILE]...] [--tree DIR]` | take and swap |
 | `dibs pass [res...] [--restore]` | give back |
 | `dibs cancel` | stop this worktree's take, in line or mid-swap, and give back what it got |
 | `dibs check [res...]` | exit 0 if still yours and still serving you |
