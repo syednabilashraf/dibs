@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/syednabilashraf/dibs/internal/browser"
 	"github.com/syednabilashraf/dibs/internal/config"
 	"github.com/syednabilashraf/dibs/internal/guard"
+	"github.com/syednabilashraf/dibs/internal/pressure"
 	"github.com/syednabilashraf/dibs/internal/queue"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/tree"
@@ -88,12 +91,68 @@ func runGuard(e *env, args []string) int {
 		emitDeny(e.stdout, decision.Reason)
 		return exitOK
 	}
+	if h.cfg.Browser.Drives(h.in.ToolName) {
+		if reason := h.prepareBrowser(); reason != "" {
+			emitDeny(e.stdout, reason)
+		}
+		return exitOK
+	}
 	if h.in.ToolName == "Bash" && h.in.ToolUseID != "" {
 		if len(guard.Touches(h.st, h.in.ToolInput.Command)) > 0 {
 			h.recordInflight()
 		}
 	}
 	return exitOK
+}
+
+func (h *hookContext) prepareBrowser() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	opts := browserOptions(h.cfg)
+	if !browser.Managed(opts) {
+		return ""
+	}
+	if !browser.Ready(ctx, opts.Port) {
+		if browser.ProfileOwner(opts.Profile) != 0 && pressure.Current(ctx) == pressure.Critical {
+			return "dibs: the shared browser is running but not answering, because this machine is out of memory (memory pressure is critical). Do not kill or relaunch it: a relaunch can lose the logins every session relies on. Close browser tabs you no longer need, pass containers you are not testing with, and retry in a few minutes."
+		}
+		if browser.Ensure(ctx, opts) != nil {
+			return ""
+		}
+	}
+	if !strings.HasSuffix(h.in.ToolName, "__new_page") {
+		return ""
+	}
+	pages, err := browser.Pages(ctx, opts.Port)
+	if err != nil {
+		return ""
+	}
+	if limit := h.cfg.Browser.TabLimit(); limit > 0 && len(pages) >= limit {
+		return fmt.Sprintf("dibs: %d tabs are already open in the shared browser, the most allowed (browser.max_tabs in the dibs config). Close the tabs you no longer need with close_page (list_pages shows them), then open a new one. Every session uses this one browser, so close only tabs you opened.", len(pages))
+	}
+	if len(pages) > 1 && pressure.Current(ctx) == pressure.Critical {
+		return "dibs: this machine is out of memory (memory pressure is critical), and every open tab costs memory. Use a tab you already have (navigate it), or close tabs you no longer need with close_page, instead of opening another; new tabs wait until the pressure eases."
+	}
+	return ""
+}
+
+const (
+	pressureCheckEvery = time.Minute
+	pressureTellEvery  = 10 * time.Minute
+)
+
+func (h *hookContext) pressureNote(mem *sessionMemory, now time.Time) (string, bool) {
+	if h.caller == nil || len(h.st.HeldBy(h.self(), now)) == 0 || now.Sub(mem.PressureChecked) < pressureCheckEvery {
+		return "", false
+	}
+	mem.PressureChecked = now
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if pressure.Current(ctx) != pressure.Critical || now.Sub(mem.PressureTold) < pressureTellEvery {
+		return "", true
+	}
+	mem.PressureTold = now
+	return "dibs: this machine is out of memory (memory pressure is critical), so containers and the browser respond slowly or time out. Pass what you are not testing with, close browser tabs you do not need, and hold off on builds and test runs until it eases. Do not restart or relaunch shared containers or the browser to fix the slowness.", true
 }
 
 var unsafeFileChars = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
@@ -138,6 +197,9 @@ type sessionMemory struct {
 	Held        map[string]time.Time `json:"held,omitempty"`
 	Observed    time.Time            `json:"observed,omitempty"`
 	Reminded    time.Time            `json:"reminded,omitempty"`
+
+	PressureChecked time.Time `json:"pressure_checked,omitempty"`
+	PressureTold    time.Time `json:"pressure_told,omitempty"`
 }
 
 const waitingReminder = 10 * time.Minute
@@ -197,7 +259,11 @@ func (h *hookContext) post(w io.Writer) {
 	notes, dirty := h.swapNotes(mem, now)
 	leaseNotes, leaseDirty := h.leaseNotes(mem, now)
 	notes = append(notes, leaseNotes...)
-	if dirty || leaseDirty || len(notes) > 0 {
+	pressureText, checked := h.pressureNote(mem, now)
+	if pressureText != "" {
+		notes = append(notes, pressureText)
+	}
+	if dirty || leaseDirty || checked || len(notes) > 0 {
 		h.saveSession(mem)
 	}
 	if len(notes) > 0 {

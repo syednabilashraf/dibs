@@ -78,13 +78,9 @@ func Ensure(ctx context.Context, opts Options) error {
 	}
 	defer logFile.Close()
 
-	cmd := exec.Command(chrome, LaunchArgs(opts)...)
-	cmd.Stdout, cmd.Stderr = logFile, logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
+	if err := launch(chrome, LaunchArgs(opts), logFile); err != nil {
 		return fmt.Errorf("launch %s: %w", chrome, err)
 	}
-	cmd.Process.Release()
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -100,14 +96,55 @@ func Ensure(ctx context.Context, opts Options) error {
 	return fmt.Errorf("Chrome did not open its debugging port %d within 15s; see %s", opts.Port, filepath.Join(opts.StateDir, "chrome.log"))
 }
 
+func markerPath(stateDir string) string { return filepath.Join(stateDir, "browser-mcp") }
+
+func MarkManaged(opts Options) {
+	os.WriteFile(markerPath(opts.StateDir), []byte(Endpoint(opts.Port)+"\n"), 0o644)
+}
+
+func Managed(opts Options) bool {
+	_, err := os.Stat(markerPath(opts.StateDir))
+	return err == nil
+}
+
 func LaunchArgs(opts Options) []string {
 	return []string{
 		"--remote-debugging-port=" + strconv.Itoa(opts.Port),
 		"--user-data-dir=" + opts.Profile,
+		"--restore-last-session",
+		"--hide-crash-restore-bubble",
 		"--no-first-run",
 		"--no-default-browser-check",
 		"about:blank",
 	}
+}
+
+func launch(chrome string, args []string, logFile *os.File) error {
+	if bundle := appBundle(chrome); bundle != "" {
+		openArgs := append([]string{"-n", "-g", "--stdout", logFile.Name(), "--stderr", logFile.Name(), bundle, "--args"}, args...)
+		if out, err := exec.Command("open", openArgs...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	cmd := exec.Command(chrome, args...)
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+func appBundle(binary string) string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	i := strings.Index(binary, ".app/Contents/MacOS/")
+	if i < 0 {
+		return ""
+	}
+	return binary[:i+len(".app")]
 }
 
 func MCPArgs(opts Options, passthrough []string) []string {

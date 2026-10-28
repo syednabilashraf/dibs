@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/syednabilashraf/dibs/internal/pressure"
 	"github.com/syednabilashraf/dibs/internal/state"
 	"github.com/syednabilashraf/dibs/internal/tree"
 )
@@ -41,6 +42,7 @@ func newHookWorld(t *testing.T) hookWorld {
 		}
 	}
 	w := hookWorld{home: t.TempDir()}
+	underPressure(t, pressure.Normal)
 	t.Setenv("DIBS_HOME", w.home)
 	t.Setenv("DIBS_CONFIG", filepath.Join(w.home, "config.yaml"))
 	w.main, _ = tree.Resolve(mainDir)
