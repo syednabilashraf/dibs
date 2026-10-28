@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/syednabilashraf/dibs/internal/browser"
+	"github.com/syednabilashraf/dibs/internal/config"
 	"github.com/syednabilashraf/dibs/internal/docker"
 	"github.com/syednabilashraf/dibs/internal/guard"
 	"github.com/syednabilashraf/dibs/internal/preflight"
@@ -63,6 +65,7 @@ func runTake(e *env, args []string) int {
 	}
 
 	before := a.heldNow(t)
+	freshBrowser := a.wantsFreshBrowser(t, names)
 	var deadline time.Time
 	if *timeout > 0 {
 		deadline = time.Now().Add(*timeout)
@@ -130,6 +133,9 @@ func runTake(e *env, args []string) int {
 	a.store.Log(state.Event{Kind: "take", Resource: strings.Join(names, ","), Tree: t.Path, Label: t.Label})
 	expires := time.Now().Add(*lease)
 	e.printf("dibs: %s holds %s until %s\n", t.Label, strings.Join(names, ", "), clock(expires))
+	if freshBrowser {
+		a.resetBrowser(ctx)
+	}
 
 	containers := a.split(names)
 	if len(containers) == 0 {
@@ -216,6 +222,34 @@ func (a *app) refuseTake(refusals []string, positional []string) {
 		a.printf("  - %s\n", refusal)
 	}
 	a.printf("dibs: ask the user before applying migrations to a shared store. To take anyway, run `dibs take %s --allow-migrations`.\n", strings.Join(positional, " "))
+}
+
+func (a *app) wantsFreshBrowser(t *tree.Tree, names []string) bool {
+	if !a.cfg.IsVirtual(config.BrowserResource) {
+		return false
+	}
+	for _, name := range names {
+		if name != config.BrowserResource {
+			continue
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			return false
+		}
+		h := st.Lookup(name).ActiveHolder(time.Now())
+		return h == nil || h.Tree != t.Path
+	}
+	return false
+}
+
+func (a *app) resetBrowser(ctx context.Context) {
+	if !browser.Managed(browserOptions(a.cfg)) {
+		return
+	}
+	closed, err := browser.ResetTabs(ctx, a.cfg.Browser.Port)
+	if err == nil && closed > 0 {
+		a.printf("dibs: browser: closed %d tab(s) left by earlier holders; it starts with one blank tab\n", closed)
+	}
 }
 
 func (a *app) warnIfBaseline(t *tree.Tree) {

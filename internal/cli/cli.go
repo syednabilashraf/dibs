@@ -257,22 +257,39 @@ func holderText(h *state.Holder) string {
 	return text
 }
 
-func runBrowserMCP(e *env, args []string) int {
-	cfg, err := config.Load()
-	if err != nil {
-		return e.errorf("%v", err)
-	}
-	opts := browser.Options{
+func browserOptions(cfg *config.Config) browser.Options {
+	return browser.Options{
 		Port:       cfg.Browser.Port,
 		Profile:    cfg.Browser.Profile,
 		Chrome:     cfg.Browser.Chrome,
 		MCPCommand: cfg.Browser.MCPCommand,
 		StateDir:   config.Home(),
 	}
+}
+
+func asksForHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			return true
+		}
+	}
+	return false
+}
+
+func runBrowserMCP(e *env, args []string) int {
+	cfg, err := config.Load()
+	if err != nil {
+		return e.errorf("%v", err)
+	}
+	opts := browserOptions(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := browser.Ensure(ctx, opts); err != nil {
+	if asksForHelp(args) {
+		fmt.Fprintf(e.stdout, "dibs browser-mcp: runs %s against the shared Chrome on port %d, launching it if needed. Its own options follow.\n\n", strings.Join(opts.MCPCommand, " "), opts.Port)
+	} else if err := browser.Ensure(ctx, opts); err != nil {
 		return e.errorf("shared browser unavailable: %v", err)
+	} else {
+		browser.MarkManaged(opts)
 	}
 	if err := browser.Exec(opts, args); err != nil {
 		return e.errorf("start %s: %v", strings.Join(opts.MCPCommand, " "), err)

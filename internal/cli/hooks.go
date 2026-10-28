@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/syednabilashraf/dibs/internal/browser"
 	"github.com/syednabilashraf/dibs/internal/config"
 	"github.com/syednabilashraf/dibs/internal/guard"
 	"github.com/syednabilashraf/dibs/internal/queue"
@@ -88,12 +90,33 @@ func runGuard(e *env, args []string) int {
 		emitDeny(e.stdout, decision.Reason)
 		return exitOK
 	}
+	if h.cfg.Browser.Drives(h.in.ToolName) {
+		if reason := h.prepareBrowser(); reason != "" {
+			emitDeny(e.stdout, reason)
+		}
+		return exitOK
+	}
 	if h.in.ToolName == "Bash" && h.in.ToolUseID != "" {
 		if len(guard.Touches(h.st, h.in.ToolInput.Command)) > 0 {
 			h.recordInflight()
 		}
 	}
 	return exitOK
+}
+
+func (h *hookContext) prepareBrowser() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	opts := browserOptions(h.cfg)
+	if !browser.Managed(opts) || browser.Ensure(ctx, opts) != nil || !strings.HasSuffix(h.in.ToolName, "__new_page") {
+		return ""
+	}
+	limit := h.cfg.Browser.TabLimit()
+	pages, err := browser.Pages(ctx, opts.Port)
+	if err != nil || limit <= 0 || len(pages) < limit {
+		return ""
+	}
+	return fmt.Sprintf("dibs: %d tabs are already open in the shared browser, the most allowed (browser.max_tabs in the dibs config). Close the tabs you no longer need with close_page (list_pages shows them), then open a new one. Every session uses this one browser, so close only tabs you opened.", len(pages))
 }
 
 var unsafeFileChars = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
