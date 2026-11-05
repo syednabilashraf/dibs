@@ -1,6 +1,6 @@
 ---
 name: dibs
-description: Take a lease on shared local Docker containers before browser QA, e2e runs, or any test that needs a running container to serve this worktree's code, and give it back afterwards. Use whenever you are about to drive a browser against a local stack or test against a running container, when a container seems to run the wrong branch or was recreated unexpectedly, when a dibs hook blocked a command, or when asked who has a container.
+description: Take a lease on shared local Docker containers before browser QA, e2e runs, or any test that needs a running container to serve this worktree's code, and give it back afterwards. Use whenever you are about to drive a browser against a local stack or test against a running container, run unit tests inside a container, take before and after screenshots of a change, keep containers for the user to test, or stop a take; when a container seems to run the wrong branch, hangs, has stale credentials or was recreated unexpectedly; when a dibs hook blocked a command; or when asked who has a container.
 ---
 
 # dibs: sharing local containers between worktrees
@@ -63,9 +63,13 @@ Databases and other stateful services are not swapped: every worktree uses the s
 
 If the repository declares migrations checks, `dibs take` runs them before recreating a container on your worktree and refuses when your branch would migrate a shared store (the output lists what would run). Ask the user before running it again with `--allow-migrations`.
 
-## Stale credentials
+## When a container hangs or has stale credentials
 
-Some containers read host credentials when they start and keep the old ones after the user renews them on the host (errors such as `invalid_grant`, or calls that hang). If the dibs config declares them, run `dibs refresh`: it restarts the declared containers that started before the credentials changed, skips any held by other worktrees, and runs migrations checks first. Do not restart shared containers any other way.
+Some containers keep what they had when they started: credentials the user has since renewed on the host (errors such as `invalid_grant`), or a connection pool that has wedged (requests reach the container and never answer, while a fresh client inside it works). A restart fixes both, and `dibs refresh` is the only restart you may run:
+
+- `dibs refresh <container>` restarts that container if the dibs config declares it under `refresh`. It checks the host credentials and the container's migrations first, waits for commands running in it, and refuses containers another worktree holds.
+- `dibs refresh` with no name restarts the declared containers that started before the host credentials changed.
+- If the container is not declared, or refresh refuses, ask the user. Do not restart shared containers any other way.
 
 ## When the baseline is behind
 
@@ -198,6 +202,6 @@ Exit code 2 always means "no", and 1 means something broke.
 
 - Hold containers while writing code.
 - Report test results without a passing `dibs check`.
-- Restart, rebuild, recreate or re-point shared containers yourself.
+- Restart, rebuild, recreate or re-point shared containers yourself. `dibs refresh` is the one sanctioned restart.
 - Switch branches in any worktree but your own, or edit anything in the baseline checkout.
 - Run `dibs grab` or `dibs drop`, or edit files under `~/.dibs`.
