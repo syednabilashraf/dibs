@@ -149,3 +149,17 @@ func TestSwapNotesExplainARefresh(t *testing.T) {
 		t.Fatalf("notes = %v", notes)
 	}
 }
+
+func TestPrimerPointsAtRefreshForRestarts(t *testing.T) {
+	w := newWorld(t)
+	st := w.aHoldsEverything()
+	text := Primer(w.cfg, st, w.b, "/tmp/dibs-app-b-12345678", now, false)
+	if !strings.Contains(text, "blocks this for containers another worktree holds") || !strings.Contains(text, "ask the user to restart it") || strings.Contains(text, "dibs refresh") {
+		t.Fatalf("without refresh configured, restarts go to the user:\n%s", text)
+	}
+	w.cfg.Refresh.Containers = []string{"api", "web"}
+	text = Primer(w.cfg, st, w.b, "/tmp/dibs-app-b-12345678", now, false)
+	if !strings.Contains(text, "run `dibs refresh <container>`") || !strings.Contains(text, "allows it for api, web") {
+		t.Fatalf("with refresh configured, the primer names it and the containers:\n%s", text)
+	}
+}

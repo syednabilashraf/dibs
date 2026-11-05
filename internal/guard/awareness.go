@@ -118,13 +118,23 @@ func Primer(cfg *config.Config, st *state.State, caller *tree.Tree, tmpdir strin
 	if idle := cfg.IdleRelease.D(); idle > 0 {
 		b.WriteString(fmt.Sprintf("- While someone waits for what you hold, %s without a tool call loses you those leases; renewing does not count. To keep them on purpose (the user wants to test, or you stop to wait for the user), run `dibs hold --for <time> --note '<why>'`, which is bounded and tells the others why, and tell the user. Never renew in a loop.\n", fmtMinutes(idle)))
 	}
-	b.WriteString("- Never restart, recreate, rebuild or re-point shared containers yourself, and never switch branches in another worktree. The dibs hook blocks these; do not work around it.\n")
+	b.WriteString(restartRule(cfg))
 	b.WriteString("- Unit tests need no lease: run them with `dibs test <container> -- <command>`, which uses a private copy of the container with your worktree mounted, so no other session can disturb the run. Copying your code into the shared container under `" + tmpdir + "` also works, but another session's `dibs take` can recreate that container, which kills commands running in it and deletes everything copied into it.\n")
 	b.WriteString("- Databases and other stateful services are shared by every worktree. A migration or data you apply is seen by all sessions and can break containers built from other checkouts, so ask the user before applying a schema migration to a shared database.\n")
 	b.WriteString("- `dibs status` shows who holds what. The dibs skill has the full protocol.\n")
 	b.WriteString("\nRight now:\n")
 	b.WriteString(Snapshot(st, caller, now))
 	return b.String()
+}
+
+func restartRule(cfg *config.Config) string {
+	text := "- Never restart, recreate, rebuild or re-point shared containers yourself, and never switch branches in another worktree. The dibs hook blocks this for containers another worktree holds; for the rest it is still the rule, because a restart kills other sessions' running commands and the files they copied into the container."
+	if declared := cfg.Refresh.Containers; len(declared) > 0 {
+		text += fmt.Sprintf(" If a container hangs (requests arrive and never answer) or has stale credentials, run `dibs refresh <container>`, which restarts it safely; the dibs config allows it for %s. For any other container, ask the user.", strings.Join(declared, ", "))
+	} else {
+		text += " If a container hangs or has stale credentials, ask the user to restart it."
+	}
+	return text + "\n"
 }
 
 func BaselineWarning(root string, containers []string, enforced bool) string {
